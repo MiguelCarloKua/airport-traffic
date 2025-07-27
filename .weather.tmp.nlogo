@@ -512,23 +512,12 @@ next-arrival-time
 11
 
 MONITOR
-958
-284
-1086
-329
-Next Departure Time
-next-departure-time
-17
-1
-11
-
-MONITOR
-885
+894
 364
-965
+1022
 409
-Total Flights
-total-flights-handled
+Next Departure Time
+nex-departure-time
 17
 1
 11
