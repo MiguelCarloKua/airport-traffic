@@ -157,7 +157,7 @@ to setup-agents
     set label "ATC"
   ]
 
-  create-planes set-planes [
+  create-planes 3 [
     setxy random-xcor max-pycor + 5 ; off the top of the map
     set color blue
     set shape "airplane"
@@ -333,6 +333,21 @@ GRAPHICS-WINDOW
 ticks
 30.0
 
+SLIDER
+0
+0
+0
+0
+NIL
+NIL
+0
+100
+50.0
+1
+1
+NIL
+HORIZONTAL
+
 BUTTON
 1095
 51
@@ -421,21 +436,6 @@ count planes with [current-state = \"departed\"]
 17
 1
 11
-
-SLIDER
-1109
-633
-1282
-667
-set-planes
-set-planes
-0
-100
-22.0
-1
-1
-NIL
-HORIZONTAL
 
 @#$#@#$#@
 ## WHAT IS IT?
