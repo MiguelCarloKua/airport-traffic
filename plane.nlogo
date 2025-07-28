@@ -11,8 +11,8 @@ breed [customers customer]
 
 ; Global variables
 globals [
-  weather-condition     ; "clear" "rain" "snow" "fog"
-  time-of-day          ; "morning" "midday" "evening" "night"
+  ;weather-condition     ; "clear" "rain" "snow" "fog"
+  ;time-of-day          ; "morning" "midday" "evening" "night"
   season               ; "peak" "off-peak"
 
   runway-patches
@@ -37,6 +37,9 @@ globals [
   next-departure-time
 
   congestion-map
+  weather-speed-multiplier
+  base-arrival-interval
+  base-departure-interval
 
   navigable-patches
 ]
@@ -66,7 +69,7 @@ to setup
   reset-ticks
 
   set weather-condition "clear"
-  set time-of-day "midday"
+  ;set time-of-day "midday"
   set season "off-peak"
   set total-flights-handled 0
   set total-arrivals 0
@@ -80,20 +83,41 @@ to setup
   set flight-schedule table:make
   set congestion-map table:make
 
+  set weather-speed-multiplier 1.0
+  set base-arrival-interval 20
+  set base-departure-interval 25
+
   setup-airport-layout
   setup-agents
   schedule-initial-flights
   update-displays
+
+  set-weather-effects
+
 end
 
 to setup-airport-layout
   ask patches [ set pcolor white ]
 
+  ; Background color changes with time of day
+  if time-of-day = "morning" [
+    ask patches [ set pcolor sky + 1 ]
+  ]
+  if time-of-day = "midday" [
+    ask patches [ set pcolor orange - 1 ]
+  ]
+  if time-of-day = "evening" [
+    ask patches [ set pcolor orange + 1 ]
+  ]
+  if time-of-day = "night" [
+    ask patches [ set pcolor black - 2 ]
+  ]
+
   set runway-patches patches with [
     (pycor = 25 and pxcor >= 20 and pxcor <= 80) or
     (pxcor = 50 and pycor >= 35 and pycor <= 55)
   ]
-  ask runway-patches [ set pcolor blue + 2 set plabel "RUNWAY" ]
+  ask runway-patches [ set pcolor blue + 2 ];set plabel "RUNWAY"
 
   set taxiway-patches patches with [
     (pycor = 30 and pxcor >= 15 and pxcor <= 85) or
@@ -107,31 +131,31 @@ to setup-airport-layout
     (pxcor = 75 and pycor >= 25 and pycor <= 60) or
     (pxcor = 85 and pycor >= 25 and pycor <= 60)
   ]
-  ask taxiway-patches [ set pcolor gray set plabel "TAXI" ]
+  ask taxiway-patches [ set pcolor gray ] ; set plabel "TAXI"
 
   set gate-patches patches with [
     (pycor = 60 and (pxcor = 15 or pxcor = 25 or pxcor = 35)) or
     (pycor = 60 and (pxcor = 65 or pxcor = 75 or pxcor = 85)) ;or
     ;(pycor = 15 and pxcor >= 25 and pxcor <= 75 and pxcor mod 10 = 5)
   ]
-  ask gate-patches [ set pcolor green + 1 set plabel "GATE" ]
+  ask gate-patches [ set pcolor green + 1 ] ; set plabel "GATE"
 
   set intersection-patches patches with [
     member? self taxiway-patches and
     count neighbors with [member? self taxiway-patches] >= 3
   ]
-  ask intersection-patches [ set pcolor yellow set plabel "INT" ]
+  ask intersection-patches [ set pcolor yellow  ] ; set plabel "INT"
 
   set hangar-patches patches with [
     (pxcor >= 5 and pxcor <= 10 and pycor >= 40 and pycor <= 50)
   ]
-  ask hangar-patches [ set pcolor brown set plabel "HANGAR" ]
+  ask hangar-patches [ set pcolor brown  ] ;set plabel "HANGAR"
 
   ask patches with [
     pxcor >= 40 and pxcor <= 60 and pycor >= 65 and pycor <= 75
   ] [
     set pcolor black
-    set plabel "BUILDING"
+    ;set plabel "BUILDING"
   ]
 
   set navigable-patches (patch-set runway-patches taxiway-patches gate-patches intersection-patches)
@@ -141,7 +165,7 @@ to setup-airport-layout
     pycor = min-pycor or pycor = max-pycor
   ] [
     set pcolor red - 2
-    set plabel "EDGE"
+    ;set plabel "EDGE"
   ]
 
 end
@@ -170,9 +194,92 @@ to setup-agents
 end
 
 to schedule-initial-flights
-  set next-arrival-time ticks + 20 + random 30
-  set next-departure-time ticks + 40 + random 30
+  set next-arrival-time ticks + calculate-arrival-interval
+  set next-departure-time ticks + calculate-departure-interval
 end
+
+to-report calculate-arrival-interval
+  let interval base-arrival-interval
+  if time-of-day = "morning" or time-of-day = "evening" [ set interval interval * 0.7 ]
+  if time-of-day = "midday" [ set interval interval * 1.0 ]
+  if time-of-day = "night" [ set interval interval * 1.5 ]
+  if season = "peak" [ set interval interval * 0.8 ]
+  if season = "off-peak" [ set interval interval * 1.2 ]
+  report max list 1 interval
+end
+
+to-report calculate-departure-interval
+  let interval base-departure-interval
+  if time-of-day = "morning" or time-of-day = "evening" [ set interval interval * 0.7 ]
+  if time-of-day = "midday" [ set interval interval * 1.0 ]
+  if time-of-day = "night" [ set interval interval * 1.5 ]
+  if season = "peak" [ set interval interval * 0.8 ]
+  if season = "off-peak" [ set interval interval * 1.2 ]
+  report max list 1 interval
+end
+
+to schedule-new-arrival
+  create-planes 1 [
+    let target-gate one-of gate-patches with [pycor = 60]
+    if target-gate != nobody [ move-to target-gate ]
+    set color white
+    set shape "airplane"
+    set size 1.5
+    set plane-type "arriving"
+    set current-state "parked"
+    set base-speed 0.5
+    set current-speed base-speed
+    set flight-id word "ARR_" (random 10000)
+  ]
+  set total-arrivals total-arrivals + 1
+  set total-flights-handled total-flights-handled + 1
+  set flights-this-hour flights-this-hour + 1
+  set next-arrival-time ticks + calculate-arrival-interval
+end
+
+to schedule-new-departure
+  let target-hangar one-of hangar-patches
+  let target-gate one-of gate-patches with [pycor = 15 and not any? turtles-here]
+
+  if target-hangar != nobody and target-gate != nobody [
+    create-planes 1 [
+      setxy [pxcor] of target-hangar [pycor] of target-hangar
+      set color white
+      set shape "airplane"
+      set size 1.5
+      set plane-type "departing"
+      set current-state "to-gate"
+      set base-speed 0.5
+      set current-speed base-speed
+      set scheduled-departure ticks + 30
+      set destination target-gate
+    ]
+    set total-departures total-departures + 1
+    set total-flights-handled total-flights-handled + 1
+    set flights-this-hour flights-this-hour + 1
+    set next-departure-time ticks + calculate-departure-interval
+  ]
+end
+
+to manage-traffic
+  ; Assign gates to new arrivals
+  let unassigned-arrivals planes with [plane-type = "arriving" and gate-assigned = nobody]
+  ask unassigned-arrivals [
+    let gate one-of gate-patches with [not any? planes-here]
+    if gate != nobody [
+      set gate-assigned gate
+      set destination gate
+  ]]
+  ; Allow one plane to depart
+  let ready-for-runway planes with [current-state = "awaiting-takeoff"]
+  if any? ready-for-runway [
+    ask one-of ready-for-runway [
+      set current-state "departed"
+      die
+    ]
+  ]
+end
+
 
 to update-displays
   ask turtles [ set label who ]
@@ -181,6 +288,20 @@ to update-displays
     if not any? turtles-here [ set plabel word plabel "" ]
   ]
 end
+
+to set-weather-effects
+  if weather-condition = "clear" [ set weather-speed-multiplier 1.0 ]
+  if weather-condition = "rain" [ set weather-speed-multiplier 0.8 ]
+  if weather-condition = "fog" [ set weather-speed-multiplier 0.6 ]
+  if weather-condition = "snow" [ set weather-speed-multiplier 0.5 ]
+  ask planes [
+    set current-speed base-speed * weather-speed-multiplier
+    set current-speed max list 0.01 current-speed
+  ]
+end
+
+
+
 
 to go
   ask planes [
@@ -426,7 +547,7 @@ SLIDER
 1109
 633
 1282
-667
+666
 set-planes
 set-planes
 0
@@ -436,6 +557,26 @@ set-planes
 1
 NIL
 HORIZONTAL
+
+CHOOSER
+919
+64
+1057
+109
+time-of-day
+time-of-day
+"midday" "evening" "morning" "night"
+3
+
+CHOOSER
+925
+131
+1063
+176
+weather-condition
+weather-condition
+"fog" "clear" "rain" "snow"
+1
 
 @#$#@#$#@
 ## WHAT IS IT?
