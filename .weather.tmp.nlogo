@@ -72,8 +72,8 @@ to setup
   set flight-schedule table:make
   set congestion-map table:make
   set weather-speed-multiplier 1.0
-  set base-arrival-interval 50
-  set base-departure-interval 60
+  set base-arrival-interval 20
+  set base-departure-interval 25
   setup-airport-layout
   setup-agents
   schedule-initial-flights
@@ -83,6 +83,7 @@ end
 
 to setup-airport-layout
   ask patches [ set pcolor blue ]
+
 
   set runway-patches patches with [
     (pycor = 25 and pxcor >= 20 and pxcor <= 80) or
@@ -127,11 +128,6 @@ to setup-airport-layout
   ]
 end
 
-
-
-
-
-
 to setup-agents
   create-towers 1 [
     setxy 50 30
@@ -161,7 +157,6 @@ to schedule-initial-flights
   set next-departure-time ticks + calculate-departure-interval
 end
 
-[to-report calculate-arrival-interval ...]
 to-report calculate-arrival-interval
   let interval base-arrival-interval
   if time-of-day = "morning" or time-of-day = "evening" [ set interval interval * 0.7 ]
@@ -172,7 +167,6 @@ to-report calculate-arrival-interval
   report max list 1 interval
 end
 
-[to-report calculate-departure-interval ...]
 to-report calculate-departure-interval
   let interval base-departure-interval
   if time-of-day = "morning" or time-of-day = "evening" [ set interval interval * 0.7 ]
@@ -183,7 +177,6 @@ to-report calculate-departure-interval
   report max list 1 interval
 end
 
-[to schedule-new-arrival ...]
 to schedule-new-arrival
   create-planes 1 [
     let target-gate one-of gate-patches with [pycor = 60]
@@ -203,33 +196,39 @@ to schedule-new-arrival
   set next-arrival-time ticks + calculate-arrival-interval
 end
 
-[to schedule-new-departure ...]
+
 to schedule-new-departure
-  create-planes 1 [
-    let target-gate one-of gate-patches with [pycor = 15]
-    if target-gate != nobody [ move-to target-gate ]
-    set color white
-    set shape "airplane"
-    set size 1.5
-    set plane-type "departing"
-    set current-state "ready"
-    set base-speed 0.5
-    set current-speed base-speed
-    set flight-id word "DEP_" (random 10000)
+  let target-hangar one-of hangar-patches
+  let target-gate one-of gate-patches with [pycor = 15 and not any? turtles-here]
+
+  if target-hangar != nobody and target-gate != nobody [
+    create-planes 1 [
+      setxy [pxcor] of target-hangar [pycor] of target-hangar
+      set color white
+      set shape "airplane"
+      set size 1.5
+      set plane-type "departing"
+      set current-state "to-gate"
+      set base-speed 0.5
+      set current-speed base-speed
+      set scheduled-departure ticks + 30
+      set destination target-gate
+    ]
+    set total-departures total-departures + 1
+    set total-flights-handled total-flights-handled + 1
+    set flights-this-hour flights-this-hour + 1
+    set next-departure-time ticks + calculate-departure-interval
   ]
-  set total-departures total-departures + 1
-  set total-flights-handled total-flights-handled + 1
-  set flights-this-hour flights-this-hour + 1
-  set next-departure-time ticks + calculate-departure-interval
 end
 
-[to update-displays ... (optional cleanup)]
+
+
 to update-displays
   ask turtles [ set label "" ]
   ask patches [ set plabel "" ]
 end
 
-[to set-weather-effects ...]
+
 to set-weather-effects
   if weather-condition = "clear" [ set weather-speed-multiplier 1.0 ]
   if weather-condition = "rain" [ set weather-speed-multiplier 0.8 ]
@@ -241,13 +240,13 @@ to set-weather-effects
   ]
 end
 
-[to taxi-randomly ...]
+
 to taxi-randomly
   let next-patch one-of neighbors4 with [member? self taxiway-patches or member? self gate-patches]
   if next-patch != nobody [ face next-patch forward current-speed ]
 end
 
-[to update-plane-states ...]
+
 to update-plane-states
   ask planes [
     if current-state = "ready" and plane-type = "departing" [ set current-state "taxiing-to-runway" ]
@@ -258,20 +257,28 @@ to update-plane-states
   ]
 end
 
-[to manage-traffic ...]
+
 to manage-traffic
-  ask towers [
-    let unassigned-arrivals planes with [plane-type = "arriving" and gate-assigned = nobody]
-    ask unassigned-arrivals [
-      let gate one-of gate-patches with [not any? planes-here]
-      if gate != nobody [ set gate-assigned gate set destination gate ]
+  ; Assign gates to new arrivals
+  let unassigned-arrivals planes with [plane-type = "arriving" and gate-assigned = nobody]
+  ask unassigned-arrivals [
+    let gate one-of gate-patches with [not any? planes-here]
+    if gate != nobody [
+      set gate-assigned gate
+      set destination gate
     ]
-    let ready-for-runway planes with [current-state = "awaiting-takeoff"]
-    if any? ready-for-runway [ ask one-of ready-for-runway [ set current-state "departed" die ] ]
+  ]
+
+  ; Allow one plane to depart
+  let ready-for-runway planes with [current-state = "awaiting-takeoff"]
+  if any? ready-for-runway [
+    ask one-of ready-for-runway [
+      set current-state "departed"
+      die
+    ]
   ]
 end
 
-[to update-gates ...]
 to update-gates
   let parked-planes planes with [current-state = "parked"]
   ask parked-planes [
@@ -279,12 +286,12 @@ to update-gates
   ]
 end
 
-[to update-runway-usage ...]
+
 to update-runway-usage
   ask planes with [member? patch-here runway-patches] [ set runway-utilization-time runway-utilization-time + 1 ]
 end
 
-[to resolve-intersections ...]
+
 to resolve-intersections
   ask planes [
     if member? patch-here intersection-patches [
@@ -297,7 +304,7 @@ to resolve-intersections
   ]
 end
 
-[to update-trucks ...]
+
 to update-trucks
   ask trucks [
     if not busy [
@@ -314,7 +321,7 @@ to update-trucks
   ]
 end
 
-[to update-customers ...]
+
 to update-customers
   ask customers [
     if patch-here = destination-gate [
@@ -409,7 +416,7 @@ CHOOSER
 weather-condition
 weather-condition
 "clear" "rain" "snow" "fog"
-3
+2
 
 MONITOR
 1045
