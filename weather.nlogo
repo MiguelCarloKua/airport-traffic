@@ -127,6 +127,7 @@ to setup-airport-layout
   ]
 end
 
+
 to setup-agents
   create-towers 1 [
     setxy 50 30
@@ -141,7 +142,7 @@ to setup-agents
   create-planes 3 [
     setxy one-of [25 30 35] 60
     set color white
-    set shape "circle"
+    set shape "airplane"
     set size 1.5
     set plane-type "departing"
     set current-state "ready"
@@ -149,6 +150,7 @@ to setup-agents
     set current-speed base-speed
   ]
 end
+
 
 to schedule-initial-flights
   set next-arrival-time ticks + calculate-arrival-interval
@@ -180,7 +182,7 @@ to schedule-new-arrival
     let target-gate one-of gate-patches with [pycor = 60]
     if target-gate != nobody [ move-to target-gate ]
     set color white
-    set shape "circle"
+    set shape "airplane"
     set size 1.5
     set plane-type "arriving"
     set current-state "parked"
@@ -194,12 +196,13 @@ to schedule-new-arrival
   set next-arrival-time ticks + calculate-arrival-interval
 end
 
+
 to schedule-new-departure
   create-planes 1 [
     let target-gate one-of gate-patches with [pycor = 15]
     if target-gate != nobody [ move-to target-gate ]
     set color white
-    set shape "circle"
+    set shape "airplane"
     set size 1.5
     set plane-type "departing"
     set current-state "ready"
@@ -214,12 +217,10 @@ to schedule-new-departure
 end
 
 to update-displays
-  ask turtles [ set label who ]
-  ask patches [
-    if any? turtles-here [ set plabel word plabel " *" ]
-    if not any? turtles-here [ set plabel word plabel "" ]
-  ]
+  ask turtles [ set label "" ]
+  ask patches [ set plabel "" ]
 end
+
 
 to set-weather-effects
   if weather-condition = "clear" [ set weather-speed-multiplier 1.0 ]
@@ -232,10 +233,12 @@ to set-weather-effects
   ]
 end
 
+
 to taxi-randomly
   let next-patch one-of neighbors4 with [member? self taxiway-patches or member? self gate-patches]
   if next-patch != nobody [ face next-patch forward current-speed ]
 end
+
 
 to update-plane-states
   ask planes [
@@ -246,6 +249,7 @@ to update-plane-states
     if current-state = "taxiing-to-gate" and member? patch-here gate-patches [ set current-state "parked" ]
   ]
 end
+
 
 to manage-traffic
   ask towers [
@@ -259,6 +263,7 @@ to manage-traffic
   ]
 end
 
+
 to update-gates
   let parked-planes planes with [current-state = "parked"]
   ask parked-planes [
@@ -266,9 +271,11 @@ to update-gates
   ]
 end
 
+
 to update-runway-usage
   ask planes with [member? patch-here runway-patches] [ set runway-utilization-time runway-utilization-time + 1 ]
 end
+
 
 to resolve-intersections
   ask planes [
@@ -281,6 +288,7 @@ to resolve-intersections
     ]
   ]
 end
+
 
 to update-trucks
   ask trucks [
@@ -297,6 +305,7 @@ to update-trucks
     ]
   ]
 end
+
 
 to update-customers
   ask customers [
@@ -392,7 +401,7 @@ CHOOSER
 weather-condition
 weather-condition
 "clear" "rain" "snow" "fog"
-2
+3
 
 MONITOR
 1045

@@ -82,7 +82,7 @@ to setup
 end
 
 to setup-airport-layout
-  ask patches [ set pcolor  ]
+  ask patches [ set pcolor blue ]
 
   set runway-patches patches with [
     (pycor = 25 and pxcor >= 20 and pxcor <= 80) or
@@ -127,6 +127,11 @@ to setup-airport-layout
   ]
 end
 
+
+
+
+
+
 to setup-agents
   create-towers 1 [
     setxy 50 30
@@ -141,7 +146,7 @@ to setup-agents
   create-planes 3 [
     setxy one-of [25 30 35] 60
     set color white
-    set shape "circle"
+    set shape "airplane"
     set size 1.5
     set plane-type "departing"
     set current-state "ready"
@@ -150,11 +155,13 @@ to setup-agents
   ]
 end
 
+
 to schedule-initial-flights
   set next-arrival-time ticks + calculate-arrival-interval
   set next-departure-time ticks + calculate-departure-interval
 end
 
+[to-report calculate-arrival-interval ...]
 to-report calculate-arrival-interval
   let interval base-arrival-interval
   if time-of-day = "morning" or time-of-day = "evening" [ set interval interval * 0.7 ]
@@ -165,6 +172,7 @@ to-report calculate-arrival-interval
   report max list 1 interval
 end
 
+[to-report calculate-departure-interval ...]
 to-report calculate-departure-interval
   let interval base-departure-interval
   if time-of-day = "morning" or time-of-day = "evening" [ set interval interval * 0.7 ]
@@ -175,12 +183,13 @@ to-report calculate-departure-interval
   report max list 1 interval
 end
 
+[to schedule-new-arrival ...]
 to schedule-new-arrival
   create-planes 1 [
     let target-gate one-of gate-patches with [pycor = 60]
     if target-gate != nobody [ move-to target-gate ]
     set color white
-    set shape "circle"
+    set shape "airplane"
     set size 1.5
     set plane-type "arriving"
     set current-state "parked"
@@ -194,12 +203,13 @@ to schedule-new-arrival
   set next-arrival-time ticks + calculate-arrival-interval
 end
 
+[to schedule-new-departure ...]
 to schedule-new-departure
   create-planes 1 [
     let target-gate one-of gate-patches with [pycor = 15]
     if target-gate != nobody [ move-to target-gate ]
     set color white
-    set shape "circle"
+    set shape "airplane"
     set size 1.5
     set plane-type "departing"
     set current-state "ready"
@@ -213,14 +223,13 @@ to schedule-new-departure
   set next-departure-time ticks + calculate-departure-interval
 end
 
+[to update-displays ... (optional cleanup)]
 to update-displays
-  ask turtles [ set label who ]
-  ask patches [
-    if any? turtles-here [ set plabel word plabel " *" ]
-    if not any? turtles-here [ set plabel word plabel "" ]
-  ]
+  ask turtles [ set label "" ]
+  ask patches [ set plabel "" ]
 end
 
+[to set-weather-effects ...]
 to set-weather-effects
   if weather-condition = "clear" [ set weather-speed-multiplier 1.0 ]
   if weather-condition = "rain" [ set weather-speed-multiplier 0.8 ]
@@ -232,11 +241,13 @@ to set-weather-effects
   ]
 end
 
+[to taxi-randomly ...]
 to taxi-randomly
   let next-patch one-of neighbors4 with [member? self taxiway-patches or member? self gate-patches]
   if next-patch != nobody [ face next-patch forward current-speed ]
 end
 
+[to update-plane-states ...]
 to update-plane-states
   ask planes [
     if current-state = "ready" and plane-type = "departing" [ set current-state "taxiing-to-runway" ]
@@ -247,6 +258,7 @@ to update-plane-states
   ]
 end
 
+[to manage-traffic ...]
 to manage-traffic
   ask towers [
     let unassigned-arrivals planes with [plane-type = "arriving" and gate-assigned = nobody]
@@ -259,6 +271,7 @@ to manage-traffic
   ]
 end
 
+[to update-gates ...]
 to update-gates
   let parked-planes planes with [current-state = "parked"]
   ask parked-planes [
@@ -266,10 +279,12 @@ to update-gates
   ]
 end
 
+[to update-runway-usage ...]
 to update-runway-usage
   ask planes with [member? patch-here runway-patches] [ set runway-utilization-time runway-utilization-time + 1 ]
 end
 
+[to resolve-intersections ...]
 to resolve-intersections
   ask planes [
     if member? patch-here intersection-patches [
@@ -282,6 +297,7 @@ to resolve-intersections
   ]
 end
 
+[to update-trucks ...]
 to update-trucks
   ask trucks [
     if not busy [
@@ -298,6 +314,7 @@ to update-trucks
   ]
 end
 
+[to update-customers ...]
 to update-customers
   ask customers [
     if patch-here = destination-gate [
@@ -392,7 +409,7 @@ CHOOSER
 weather-condition
 weather-condition
 "clear" "rain" "snow" "fog"
-2
+3
 
 MONITOR
 1045
