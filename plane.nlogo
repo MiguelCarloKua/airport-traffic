@@ -37,6 +37,8 @@ globals [
   next-departure-time
 
   congestion-map
+
+  navigable-patches
 ]
 
 planes-own [
@@ -44,6 +46,7 @@ planes-own [
   base-speed current-speed priority fuel-level gate-assigned waiting-time
   total-delay service-time flight-id scheduled-arrival scheduled-departure
   passengers needs-fuel needs-baggage emergency-status
+  wait-counter
 ]
 
 towers-own [
@@ -107,9 +110,9 @@ to setup-airport-layout
   ask taxiway-patches [ set pcolor gray set plabel "TAXI" ]
 
   set gate-patches patches with [
-    (pycor = 60 and pxcor >= 15 and pxcor <= 35 and pxcor mod 5 = 0) or
-    (pycor = 60 and pxcor >= 65 and pxcor <= 85 and pxcor mod 5 = 0) or
-    (pycor = 15 and pxcor >= 25 and pxcor <= 75 and pxcor mod 10 = 5)
+    (pycor = 60 and (pxcor = 15 or pxcor = 25 or pxcor = 35)) or
+    (pycor = 60 and (pxcor = 65 or pxcor = 75 or pxcor = 85)) ;or
+    ;(pycor = 15 and pxcor >= 25 and pxcor <= 75 and pxcor mod 10 = 5)
   ]
   ask gate-patches [ set pcolor green + 1 set plabel "GATE" ]
 
@@ -130,6 +133,17 @@ to setup-airport-layout
     set pcolor black
     set plabel "BUILDING"
   ]
+
+  set navigable-patches (patch-set runway-patches taxiway-patches gate-patches intersection-patches)
+
+  ask patches with [
+    pxcor = min-pxcor or pxcor = max-pxcor or
+    pycor = min-pycor or pycor = max-pycor
+  ] [
+    set pcolor red - 2
+    set plabel "EDGE"
+  ]
+
 end
 
 to setup-agents
@@ -144,13 +158,14 @@ to setup-agents
   ]
 
   create-planes 3 [
-    setxy one-of [25 30 35] 60
-    set color white
-    set shape "circle"
+    setxy random-xcor max-pycor + 5 ; off the top of the map
+    set color blue
+    set shape "airplane"
     set size 1.5
-    set plane-type "departing"
-    set current-state "ready"
+    set plane-type "arriving"
+    set current-state "flying"
     set base-speed 0.5
+    color-by-state
   ]
 end
 
@@ -168,16 +183,120 @@ to update-displays
 end
 
 to go
-  ask planes [ taxi-randomly ]
-  tick
+  ask planes with [current-state = "flying"] [
+  let target closest-runway
+  ifelse distance target < 1 [
+    ; Plane has reached the runway
+    move-to target
+    set current-state "landed"
+  ] [
+    face target
+    fd 0.5
+  ]
+  color-by-state
+  ]
+  ask planes with [current-state = "landed" or current-state = "taxiing"] [
+  if current-state = "landed" [
+    set current-state "taxiing"
+  ]
+  taxi-randomly
+  color-by-state
+]
+
+  ask planes with [current-state = "taxiing"] [
+    ifelse member? patch-here (gate-patches) [
+      set current-state "waiting"
+      set wait-counter 10  ; or however long you want them to wait
+    ] [
+      taxi-randomly
+    ]
+    color-by-state
+  ]
+
+  ask planes with [current-state = "waiting"] [
+    set wait-counter wait-counter - 1
+    if wait-counter <= 0 [
+      set current-state "departing"
+    ]
+    color-by-state
+  ]
+
+  ask planes with [current-state = "departing"] [
+  ifelse member? patch-here runway-patches [
+    set current-state "departed"
+    set color gray
+  ] [
+    taxi-to-runway
+    ]
+  color-by-state
+]
+
+  ask planes with [current-state = "departed"] [
+  fd 1
+  if xcor <= min-pxcor or xcor >= max-pxcor or
+     ycor <= min-pycor or ycor >= max-pycor [
+    respawn-plane
+  ]
+]
+
+
+
+
+
+ tick
 end
 
 to taxi-randomly
-  let next-patch one-of neighbors4 with [member? self taxiway-patches or member? self gate-patches]
-  if next-patch != nobody [
+  let options neighbors4 with [
+    member? self runway-patches or
+    member? self taxiway-patches or
+    member? self gate-patches or
+    member? self intersection-patches
+  ]
+  if any? options [
+    let target-gate min-one-of gate-patches [distance myself]
+    let next-patch min-one-of options [distance target-gate]
     face next-patch
     move-to next-patch
   ]
+end
+
+to taxi-to-runway
+  let options neighbors4 with [
+    member? self navigable-patches
+  ]
+  if any? options [
+    let target-runway min-one-of runway-patches [distance myself]
+    let next-patch min-one-of options [distance target-runway]
+    face next-patch
+    move-to next-patch
+  ]
+end
+
+to respawn-plane
+  setxy random-xcor (max-pycor + 5)  ; appear off top edge
+  set current-state "flying"
+  set color blue
+  set shape "airplane"
+  set plane-type "arriving"
+  set base-speed 0.5
+  set wait-counter 0
+  color-by-state
+end
+
+
+
+to color-by-state
+  if current-state = "ready"     [ set color green ]
+  if current-state = "taxiing"   [ set color orange ]
+  if current-state = "waiting"   [ set color yellow ]
+  if current-state = "emergency" [ set color red ]
+  if current-state = "departing" [ set color blue - 2 ]
+  if current-state = "departed"  [ set color gray ]
+end
+
+to-report closest-runway
+  report min-one-of runway-patches [distance myself]
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -208,9 +327,9 @@ ticks
 30.0
 
 BUTTON
-1096
+1095
 51
-1266
+1265
 103
 setup
 setup
@@ -240,6 +359,61 @@ NIL
 NIL
 NIL
 1
+
+MONITOR
+1103
+212
+1161
+257
+Flying
+count planes with [current-state = \"flying\"]
+17
+1
+11
+
+MONITOR
+1105
+293
+1163
+338
+Landed
+count planes with [current-state = \"taxiing\"]
+17
+1
+11
+
+MONITOR
+1103
+377
+1161
+422
+Waiting
+count planes with [current-state = \"waiting\"]
+17
+1
+11
+
+MONITOR
+1112
+455
+1180
+500
+Departing
+count planes with [current-state = \"departing\"]
+17
+1
+11
+
+MONITOR
+1120
+534
+1185
+579
+Departed
+count planes with [current-state = \"departed\"]
+17
+1
+11
 
 @#$#@#$#@
 ## WHAT IS IT?
