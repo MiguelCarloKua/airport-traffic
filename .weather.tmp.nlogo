@@ -11,13 +11,6 @@ breed [customers customer]
 
 ; Global variables
 globals [
-  ; Note: weather-condition is now controlled by the interface chooser
-  ; weather-condition     ; "clear" "rain" "snow" "fog" - Controlled by interface
-  ; Note: time-of-day is now controlled by the interface chooser
-  ; time-of-day          ; "morning" "midday" "evening" "night" - Controlled by interface
-  ; Note: season is now controlled by the interface chooser
-  ; season               ; "peak" "off-peak" - Controlled by interface
-
   runway-patches
   taxiway-patches
   gate-patches
@@ -27,7 +20,7 @@ globals [
   total-flights-handled
   total-arrivals
   total-departures
-  flights-this-hour ; Counter for flights in the current hour
+  flights-this-hour
   total-waiting-time
   max-delay
   cancelled-flights
@@ -40,13 +33,9 @@ globals [
   next-departure-time
 
   congestion-map
-
-  ; Weather effect multipliers
   weather-speed-multiplier
-
-  ; Time-based scheduling parameters
-  base-arrival-interval ; Base ticks between arrivals
-  base-departure-interval ; Base ticks between departures
+  base-arrival-interval
+  base-departure-interval
 ]
 
 planes-own [
@@ -71,16 +60,10 @@ customers-own [
 to setup
   clear-all
   reset-ticks
-
-  ; Get initial conditions from the interface choosers
-  ; set weather-condition "clear" ; Controlled by interface chooser
-  ; set time-of-day "midday" ; Controlled by interface chooser
-  ; set season "off-peak" ; Controlled by interface chooser
-
   set total-flights-handled 0
   set total-arrivals 0
   set total-departures 0
-  set flights-this-hour 0 ; Initialize hourly counter
+  set flights-this-hour 0
   set total-waiting-time 0
   set max-delay 0
   set cancelled-flights 0
@@ -88,22 +71,18 @@ to setup
   set gate-occupancy-time 0
   set flight-schedule table:make
   set congestion-map table:make
-  set weather-speed-multiplier 1.0 ; Initialize multiplier
-
-  ; Initialize base scheduling intervals (adjust these values as needed)
-  set base-arrival-interval 50   ; Base ticks for one arrival
-  set base-departure-interval 60 ; Base ticks for one departure
-
+  set weather-speed-multiplier 1.0
+  set base-arrival-interval 50
+  set base-departure-interval 60
   setup-airport-layout
   setup-agents
   schedule-initial-flights
   update-displays
-  ; Apply initial weather effects
   set-weather-effects
 end
 
 to setup-airport-layout
-  ask patches [ set pcolor white ]
+  ask patches [ set pcolor  ]
 
   set runway-patches patches with [
     (pycor = 25 and pxcor >= 20 and pxcor <= 80) or
@@ -143,11 +122,8 @@ to setup-airport-layout
   ]
   ask hangar-patches [ set pcolor brown set plabel "HANGAR" ]
 
-  ask patches with [
-    pxcor >= 40 and pxcor <= 60 and pycor >= 65 and pycor <= 75
-  ] [
-    set pcolor black
-    set plabel "BUILDING"
+  ask patches with [pxcor >= 40 and pxcor <= 60 and pycor >= 65 and pycor <= 75] [
+    set pcolor black set plabel "BUILDING"
   ]
 end
 
@@ -170,140 +146,72 @@ to setup-agents
     set plane-type "departing"
     set current-state "ready"
     set base-speed 0.5
-    set current-speed base-speed ; Initialize current speed
-    ; Set other initial properties as needed...
+    set current-speed base-speed
   ]
 end
 
 to schedule-initial-flights
-  ; Calculate initial next arrival/departure times based on current conditions
   set next-arrival-time ticks + calculate-arrival-interval
   set next-departure-time ticks + calculate-departure-interval
 end
 
-; --- New Procedures for Time-Based Scheduling ---
-; Calculates the interval (in ticks) until the next arrival based on time-of-day and season
 to-report calculate-arrival-interval
   let interval base-arrival-interval
-  let tod-time time-of-day   ; Get the time-of-day from the chooser
-  let current-season season  ; Get the season from the chooser
-
-  ; Adjust interval based on Time of Day
-  ; Morning Rush and Evening: Higher flight frequency
-  if tod-time = "morning" or tod-time = "evening" [
-    set interval interval * 0.7 ; Increase frequency (shorter interval)
-  ]
-  ; Midday: Moderate frequency
-  if tod-time = "midday" [
-    set interval interval * 1.0 ; Moderate frequency
-  ]
-  ; Night: Lower frequency
-  if tod-time = "night" [
-    set interval interval * 1.5 ; Decrease frequency (longer interval)
-  ]
-
-  ; Adjust interval based on Season
-  ; Peak Season: Higher flight frequency
-  if current-season = "peak" [
-    set interval interval * 0.8 ; Increase frequency during peak (shorter interval)
-  ]
-  ; Off-Peak Season: Lower flight frequency
-  if current-season = "off-peak" [
-    set interval interval * 1.2 ; Decrease frequency during off-peak (longer interval)
-  ]
-
-  ; Ensure interval is at least 1 tick
+  if time-of-day = "morning" or time-of-day = "evening" [ set interval interval * 0.7 ]
+  if time-of-day = "midday" [ set interval interval * 1.0 ]
+  if time-of-day = "night" [ set interval interval * 1.5 ]
+  if season = "peak" [ set interval interval * 0.8 ]
+  if season = "off-peak" [ set interval interval * 1.2 ]
   report max list 1 interval
 end
 
-; Calculates the interval (in ticks) until the next departure based on time-of-day and season
 to-report calculate-departure-interval
   let interval base-departure-interval
-  let tod-time time-of-day   ; Get the time-of-day from the chooser
-  let current-season season  ; Get the season from the chooser
-
-  ; Adjust interval based on Time of Day
-  ; Morning Rush and Evening: Higher flight frequency
-  if tod-time = "morning" or tod-time = "evening" [
-    set interval interval * 0.7 ; Increase frequency (shorter interval)
-  ]
-  ; Midday: Moderate frequency
-  if tod-time = "midday" [
-    set interval interval * 1.0 ; Moderate frequency
-  ]
-  ; Night: Lower frequency
-  if tod-time = "night" [
-    set interval interval * 1.5 ; Decrease frequency (longer interval)
-  ]
-
-  ; Adjust interval based on Season
-  ; Peak Season: Higher flight frequency
-  if current-season = "peak" [
-    set interval interval * 0.8 ; Increase frequency during peak (shorter interval)
-  ]
-  ; Off-Peak Season: Lower flight frequency
-  if current-season = "off-peak" [
-    set interval interval * 1.2 ; Decrease frequency during off-peak (longer interval)
-  ]
-
-  ; Ensure interval is at least 1 tick
+  if time-of-day = "morning" or time-of-day = "evening" [ set interval interval * 0.7 ]
+  if time-of-day = "midday" [ set interval interval * 1.0 ]
+  if time-of-day = "night" [ set interval interval * 1.5 ]
+  if season = "peak" [ set interval interval * 0.8 ]
+  if season = "off-peak" [ set interval interval * 1.2 ]
   report max list 1 interval
 end
 
-; Schedules a new arriving plane (placeholder logic)
 to schedule-new-arrival
-  ; Simple placeholder for creating a new arriving plane
-  ; In a full model, this would involve more complex logic
   create-planes 1 [
-    ; Place arriving plane at a gate for now (simplified)
-    let target-gate one-of gate-patches with [pycor = 60] ; Select a random gate at top gates
-    if target-gate != nobody [
-      move-to target-gate ; Move to the selected gate patch
-    ]
+    let target-gate one-of gate-patches with [pycor = 60]
+    if target-gate != nobody [ move-to target-gate ]
     set color white
     set shape "circle"
     set size 1.5
     set plane-type "arriving"
-    set current-state "parked" ; Simplified state
+    set current-state "parked"
     set base-speed 0.5
     set current-speed base-speed
-    ; Set other properties...
     set flight-id word "ARR_" (random 10000)
   ]
   set total-arrivals total-arrivals + 1
   set total-flights-handled total-flights-handled + 1
   set flights-this-hour flights-this-hour + 1
-  ; Schedule the next arrival
   set next-arrival-time ticks + calculate-arrival-interval
 end
 
-; Schedules a new departing plane (placeholder logic)
 to schedule-new-departure
-  ; Simple placeholder for creating a new departing plane
-  ; In a full model, this would involve more complex logic
   create-planes 1 [
-    ; Place departing plane at a gate for now (simplified)
-    let target-gate one-of gate-patches with [pycor = 15] ; Select a random gate at bottom gates
-    if target-gate != nobody [
-      move-to target-gate ; Move to the selected gate patch
-    ]
+    let target-gate one-of gate-patches with [pycor = 15]
+    if target-gate != nobody [ move-to target-gate ]
     set color white
     set shape "circle"
     set size 1.5
     set plane-type "departing"
-    set current-state "ready" ; Simplified state
+    set current-state "ready"
     set base-speed 0.5
     set current-speed base-speed
-    ; Set other properties...
     set flight-id word "DEP_" (random 10000)
   ]
   set total-departures total-departures + 1
   set total-flights-handled total-flights-handled + 1
   set flights-this-hour flights-this-hour + 1
-  ; Schedule the next departure
   set next-departure-time ticks + calculate-departure-interval
 end
-; --- End New Procedures for Time-Based Scheduling ---
 
 to update-displays
   ask turtles [ set label who ]
@@ -313,88 +221,116 @@ to update-displays
   ]
 end
 
-; --- New Procedure for Weather Effects ---
-; Applies weather effects, primarily modifying plane speeds
 to set-weather-effects
-  ; Ensure weather-condition is treated as a string
-  let current-weather weather-condition ; Get weather from the chooser
-
-  ; Reset multiplier based on weather
-  ; Clear: Normal speed
-  if current-weather = "clear" [
-    set weather-speed-multiplier 1.0
-  ]
-  ; Rain: Slightly slower
-  if current-weather = "rain" [
-    set weather-speed-multiplier 0.8
-  ]
-  ; Fog: Moderately slower
-  if current-weather = "fog" [
-    set weather-speed-multiplier 0.6
-  ]
-  ; Snow: Significantly slower
-  if current-weather = "snow" [
-    set weather-speed-multiplier 0.5
-  ]
-  ; Default if somehow an unknown weather condition is selected
-  ; This case should ideally not be reached if the chooser is set correctly
-  ; if not member? current-weather ["clear" "rain" "fog" "snow"] [
-  ;   set weather-speed-multiplier 1.0
-  ; ]
-
-  ; Apply the speed multiplier to all planes
+  if weather-condition = "clear" [ set weather-speed-multiplier 1.0 ]
+  if weather-condition = "rain" [ set weather-speed-multiplier 0.8 ]
+  if weather-condition = "fog" [ set weather-speed-multiplier 0.6 ]
+  if weather-condition = "snow" [ set weather-speed-multiplier 0.5 ]
   ask planes [
     set current-speed base-speed * weather-speed-multiplier
-    ; Ensure speed doesn't become zero or negative
     set current-speed max list 0.01 current-speed
   ]
 end
-; --- End New Procedure ---
-
-to go
-  ; --- Apply Weather Effects at the start of each tick ---
-  set-weather-effects
-
-  ; --- Assign New Flights based on Time of Day and Season ---
-  ; Check if it's time for a new arrival
-  if ticks >= next-arrival-time [
-    schedule-new-arrival
-  ]
-  ; Check if it's time for a new departure
-  if ticks >= next-departure-time [
-    schedule-new-departure
-  ]
-
-  ; Placeholder for other time-step events (to be implemented)
-  ; Update Plane Positions (Done by taxi-randomly for now)
-  ; Apply Weather Effects (Done above)
-  ; Check for Conflicts
-  ; Free Up Gates
-  ; Record Observations
-
-  ; Current simple plane movement
-  ask planes [ taxi-randomly ]
-  tick
-end
 
 to taxi-randomly
-  ; Use current-speed instead of base-speed for movement
   let next-patch one-of neighbors4 with [member? self taxiway-patches or member? self gate-patches]
-  if next-patch != nobody [
-    face next-patch
-    ; Use the potentially weather-reduced current-speed
-    forward current-speed
+  if next-patch != nobody [ face next-patch forward current-speed ]
+end
+
+to update-plane-states
+  ask planes [
+    if current-state = "ready" and plane-type = "departing" [ set current-state "taxiing-to-runway" ]
+    if current-state = "taxiing-to-runway" and member? patch-here runway-patches [ set current-state "awaiting-takeoff" ]
+    if current-state = "awaiting-takeoff" and random-float 1 < 0.05 [ set current-state "departed" die ]
+    if current-state = "arriving" [ set current-state "taxiing-to-gate" ]
+    if current-state = "taxiing-to-gate" and member? patch-here gate-patches [ set current-state "parked" ]
   ]
+end
+
+to manage-traffic
+  ask towers [
+    let unassigned-arrivals planes with [plane-type = "arriving" and gate-assigned = nobody]
+    ask unassigned-arrivals [
+      let gate one-of gate-patches with [not any? planes-here]
+      if gate != nobody [ set gate-assigned gate set destination gate ]
+    ]
+    let ready-for-runway planes with [current-state = "awaiting-takeoff"]
+    if any? ready-for-runway [ ask one-of ready-for-runway [ set current-state "departed" die ] ]
+  ]
+end
+
+to update-gates
+  let parked-planes planes with [current-state = "parked"]
+  ask parked-planes [
+    if ticks - scheduled-departure > 30 [ set current-state "ready" set destination one-of runway-patches ]
+  ]
+end
+
+to update-runway-usage
+  ask planes with [member? patch-here runway-patches] [ set runway-utilization-time runway-utilization-time + 1 ]
+end
+
+to resolve-intersections
+  ask planes [
+    if member? patch-here intersection-patches [
+      ifelse count other planes-here > 0 [
+        set current-speed 0
+      ] [
+        set current-speed base-speed * weather-speed-multiplier
+      ]
+    ]
+  ]
+end
+
+to update-trucks
+  ask trucks [
+    if not busy [
+      let target one-of planes with [needs-fuel or needs-baggage]
+      if target != nobody [ set assigned-plane target move-to target set busy true set service-time 10 ]
+    ]
+    if busy [
+      set service-time service-time - 1
+      if service-time <= 0 [
+        set busy false
+        ask assigned-plane [ set needs-fuel false set needs-baggage false ]
+      ]
+    ]
+  ]
+end
+
+to update-customers
+  ask customers [
+    if patch-here = destination-gate [
+      set boarding-time boarding-time - 1
+      if boarding-time <= 0 [ die ]
+    ]
+  ]
+end
+
+to go
+  set-weather-effects
+  if ticks >= next-arrival-time [ schedule-new-arrival ]
+  if ticks >= next-departure-time [ schedule-new-departure ]
+  update-plane-states
+  manage-traffic
+  update-gates
+  update-trucks
+  update-customers
+  resolve-intersections
+  update-runway-usage
+  ask planes [ taxi-randomly ]
+  update-displays
+  tick
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
-1310
-46
-2471
-922
+1324
+10
+2088
+588
 -1
 -1
-11.42
+7.49
 1
 6
 1
@@ -449,20 +385,20 @@ NIL
 1
 
 CHOOSER
-820
-60
-958
-105
+927
+50
+1065
+95
 weather-condition
 weather-condition
 "clear" "rain" "snow" "fog"
-1
+2
 
 MONITOR
-821
-139
-972
-184
+1045
+482
+1196
+527
 Weather Speed Multiplier
 weather-speed-multiplier
 17
@@ -470,10 +406,10 @@ weather-speed-multiplier
 11
 
 MONITOR
-826
-204
-950
-249
+934
+420
+1058
+465
 Sample Plane Speed
 [current-speed] of one-of planes
 17
@@ -481,30 +417,30 @@ Sample Plane Speed
 11
 
 CHOOSER
-652
-59
-790
-104
+927
+127
+1065
+172
 time-of-day
 time-of-day
 "morning" "midday" "evening" "night"
-0
+2
 
 CHOOSER
-651
-138
-789
-183
+926
+206
+1064
+251
 season
 season
 "peak" "off-peak"
 0
 
 MONITOR
-831
-284
-939
-329
+1072
+421
+1198
+466
 Next Arrival Time
 next-arrival-time
 17
@@ -512,15 +448,77 @@ next-arrival-time
 11
 
 MONITOR
-894
-364
-1022
-409
+1072
+357
+1199
+402
 Next Departure Time
-nex-departure-time
+next-departure-time
 17
 1
 11
+
+MONITOR
+980
+354
+1060
+399
+Total Flights
+total-flights-handled
+17
+1
+11
+
+BUTTON
+1099
+200
+1248
+233
+Manual New Arrival
+schedule-new-arrival
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+BUTTON
+1097
+293
+1267
+326
+Manual New Departure
+schedule-new-departure
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
+
+BUTTON
+1098
+249
+1263
+282
+Apply Weather Effects
+set-weather-effects
+NIL
+1
+T
+OBSERVER
+NIL
+NIL
+NIL
+NIL
+1
 
 @#$#@#$#@
 ## WHAT IS IT?
