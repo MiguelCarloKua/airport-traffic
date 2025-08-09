@@ -36,6 +36,16 @@ globals [
   base-arrival-interval
   base-departure-interval
   navigable-patches
+  c-ready
+  c-taxiing
+  c-waiting
+  c-emergency
+  c-departing
+  c-departed
+  c-flying
+  c-landed
+  c-parked
+  c-to-runway
 ]
 
 planes-own [
@@ -44,6 +54,7 @@ planes-own [
   total-delay service-time flight-id scheduled-arrival scheduled-departure
   passengers needs-fuel needs-baggage emergency-status
   wait-counter
+  last-patch
 ]
 
 towers-own [
@@ -57,6 +68,14 @@ trucks-own [
 customers-own [
   destination-gate boarding-time
 ]
+
+patches-own [
+  gate?
+  gate-reserved-by
+  gate-occupied-by
+  lock-ticks   ;; (only if you use the optional anti-gridlock bit)
+]
+
 
 to setup
   clear-all
@@ -83,6 +102,19 @@ to setup
   schedule-initial-flights
   update-displays
   set-weather-effects
+end
+
+to setup-colors
+  set c-ready      rgb 0 0 0         ; black (stands out on orange bg)
+  set c-taxiing    rgb 153 0 255     ; purple (not used by patches)
+  set c-waiting    rgb 255 64 129    ; hot pink (distinct from yellow gates)
+  set c-emergency  rgb 255 0 0       ; red
+  set c-departing  rgb 0 128 255     ; azure (differs from dark runway blue)
+  set c-departed   rgb 96 96 96      ; darker gray (differs from taxiway gray)
+  set c-flying     rgb 0 230 180     ; teal (not on map)
+  set c-landed     rgb 255 255 0     ; bright yellow (visible on runway)
+  set c-parked     rgb 255 255 255   ; white
+  set c-to-runway  rgb 0 200 0       ; bright green (still distinct from gate)
 end
 
 to setup-airport-layout
@@ -127,6 +159,20 @@ to setup-airport-layout
     (pycor = 60 and (pxcor = 65 or pxcor = 75 or pxcor = 85)) ;or
     ;(pycor = 15 and pxcor >= 25 and pxcor <= 75 and pxcor mod 10 = 5)
   ]
+
+  ; reset default patch flags
+  ask patches [
+    set gate? false
+    set gate-reserved-by nobody
+    set gate-occupied-by nobody
+    set lock-ticks 0  ;; keep if you’ll do the anti-gridlock option
+  ]
+  ; mark the gate patches
+  ask gate-patches [
+    set gate? true
+  ]
+
+
   ask gate-patches [ set pcolor green + 1 ] ; set plabel "GATE"
 
   set intersection-patches patches with [
@@ -176,6 +222,7 @@ to setup-agents
     if target-hangar != nobody [
       create-planes 1 [
         move-to target-hangar
+        set last-patch patch-here
         set color white
         set shape "airplane"
         set size 1.5
@@ -216,130 +263,109 @@ to-report calculate-departure-interval
   report max list 1 interval
 end
 
+;; REPLACE your current reserve-free-gate with this:
+to-report reserve-free-gate [ gate-y ]
+  report one-of gate-patches with
+  [ gate? and pycor = gate-y and gate-reserved-by = nobody and gate-occupied-by = nobody ]
+end
+
+
+
+
+
 ; --- Modified schedule-new-arrival to prevent gate collisions ---
 ; Ensures that a new arriving plane is only placed if an unoccupied gate can be assigned.
 to schedule-new-arrival
-  ; Find an unoccupied gate patch at the top (arrival area)
-  let target-gate one-of gate-patches with [pycor = 60 and not any? turtles-here]
-
-  ; Only create the plane if an unoccupied gate was found
-  if target-gate != nobody [
+  let g (reserve-free-gate 60)
+  if g != nobody [
     create-planes 1 [
-      ; Place the new arriving plane outside the airport (above the top edge)
       setxy random-xcor max-pycor + 5
+      set last-patch patch-here
       set color white
       set shape "airplane"
       set size 1.5
       set plane-type "arriving"
-      set current-state "flying" ; Start in flying state
+      set current-state "flying"
       set base-speed 0.5
       set current-speed base-speed
       set flight-id word "ARR_" (random 10000)
-      set destination target-gate ; Set the gate as the destination
-      set gate-assigned target-gate ; Pre-assign the gate
+      set destination g
+      set gate-assigned g
+      ask g [ set gate-reserved-by myself ]   ;; reserve from the plane
       color-by-state
-      ; Initialize other necessary properties...
     ]
-    ; Update global counters only if a plane was successfully created and placed
     set total-arrivals total-arrivals + 1
     set total-flights-handled total-flights-handled + 1
     set flights-this-hour flights-this-hour + 1
   ]
-  ; Note: If no unoccupied gate is found, no plane is created.
-  ; The scheduling logic will try again later based on the interval.
-
-  ; Schedule the next arrival attempt regardless, maintaining the frequency logic
   set next-arrival-time ticks + calculate-arrival-interval
 end
-; --- End Modified schedule-new-arrival ---
 
-; --- Modified schedule-new-departure to prevent gate collisions ---
-; Ensures that a new departing plane is only placed if an unoccupied hangar and gate can be assigned.
 to schedule-new-departure
-  ; Find an unoccupied hangar patch
-  let target-hangar one-of hangar-patches with [not any? turtles-here]
-  ; Find an unoccupied gate patch at the bottom (departure area)
-  let target-gate one-of gate-patches with [pycor = 15 and not any? turtles-here]
-
-  ; Only create the plane if both an unoccupied hangar and gate were found
-  if target-hangar != nobody and target-gate != nobody [
-    create-planes 1 [
-      ; Place the new departing plane at the unoccupied hangar
-      move-to target-hangar
-      set color white
-      set shape "airplane"
-      set size 1.5
-      set plane-type "departing"
-      set current-state "ready" ; Simplified state for this version
-      set base-speed 0.5
-      set current-speed base-speed
-      set flight-id word "DEP_" (random 10000)
-      set destination target-gate ; Set its destination gate
-      set gate-assigned target-gate ; Pre-assign the gate
-      color-by-state
-      ; Initialize other necessary properties...
+  let target-hangar one-of hangar-patches with [ not any? turtles-here ]
+  if target-hangar != nobody [
+    let g (reserve-free-gate 60)
+    if g != nobody [
+      create-planes 1 [
+        move-to target-hangar
+        set last-patch patch-here
+        set color white
+        set shape "airplane"
+        set size 1.5
+        set plane-type "departing"
+        set current-state "ready"
+        set base-speed 0.5
+        set current-speed base-speed
+        set flight-id word "DEP_" (random 10000)
+        set destination g
+        set gate-assigned g
+        ask g [ set gate-reserved-by myself ]   ;; reserve from the plane
+        color-by-state
+      ]
+      set total-departures total-departures + 1
+      set total-flights-handled total-flights-handled + 1
+      set flights-this-hour flights-this-hour + 1
     ]
-    ; Update global counters only if a plane was successfully created and placed
-    set total-departures total-departures + 1
-    set total-flights-handled total-flights-handled + 1
-    set flights-this-hour flights-this-hour + 1
   ]
-  ; Note: If no unoccupied hangar or gate is found, no plane is created.
-  ; The scheduling logic will try again later based on the interval.
-
-  ; Schedule the next departure attempt regardless, maintaining the frequency logic
   set next-departure-time ticks + calculate-departure-interval
 end
+
+
+
 ; --- End Modified schedule-new-departure ---
-
 to manage-traffic
-  ; --- Gate Assignment Logic for Arriving Planes (if needed for dynamic assignment) ---
-  ; This logic is now mostly handled during scheduling by pre-assigning gates.
-  ; However, we can keep a simplified version for robustness or future expansion.
-  let unassigned-arrivals planes with [plane-type = "arriving" and gate-assigned = nobody and current-state != "flying"]
-
+  ;; Arrivals that somehow lack a gate (robustness)
+  let unassigned-arrivals planes with [ plane-type = "arriving" and gate-assigned = nobody and current-state != "flying" ]
   ask unassigned-arrivals [
-    ; Find a gate patch that is designated as a gate AND is currently unoccupied
-    let available-gate one-of gate-patches with [pycor = 60 and not any? turtles-here]
-
-    if available-gate != nobody [
-      set gate-assigned available-gate
-      set destination available-gate
-      ; Optional: Add debug output
-      ; output-print (word "Assigned gate " available-gate " to plane " who)
+    let g one-of gate-patches with [ gate? and pycor = 60 and gate-reserved-by = nobody and gate-occupied-by = nobody ]
+    if g != nobody [
+      set gate-assigned g
+      set destination g
+      ask g [ set gate-reserved-by myself ]
     ]
-    ; Note: If no gate is available, the plane remains unassigned for now
-    ; and will be checked again in the next 'manage-traffic' call.
   ]
 
-  ; --- Gate Assignment Logic for Departing Planes (if needed for dynamic assignment) ---
-  ; This logic is now mostly handled during scheduling by pre-assigning gates.
-  let unassigned-departures planes with [plane-type = "departing" and current-state = "ready" and gate-assigned = nobody]
-
+  ;; Departures that somehow lack a gate
+  let unassigned-departures planes with [ plane-type = "departing" and current-state = "ready" and gate-assigned = nobody ]
   ask unassigned-departures [
-    ; Find a gate patch at the bottom that is designated as a gate AND is currently unoccupied
-    let available-gate one-of gate-patches with [pycor = 15 and not any? turtles-here]
-
-    if available-gate != nobody [
-      set gate-assigned available-gate
-      set destination available-gate
-      ; Optional: Add debug output
-      ; output-print (word "Assigned gate " available-gate " to departing plane " who)
+    let g one-of gate-patches with [ gate? and pycor = 60 and gate-reserved-by = nobody and gate-occupied-by = nobody ]
+    if g != nobody [
+      set gate-assigned g
+      set destination g
+      ask g [ set gate-reserved-by myself ]
     ]
-    ; Note: If no gate is available, the plane remains unassigned for now
-    ; and will be checked again in the next 'manage-traffic' call.
   ]
 
-  ; Placeholder for departure logic (if it exists or will be implemented)
-  ; Allow one plane to depart (example logic, might need adjustment)
-  let ready-for-runway planes with [current-state = "awaiting-takeoff"]
+  ;; (keep your placeholder runway logic below if you want)
+  let ready-for-runway planes with [ current-state = "awaiting-takeoff" ]
   if any? ready-for-runway [
     ask one-of ready-for-runway [
       set current-state "departed"
-      die ; Or transition to a departed state
+      die
     ]
   ]
 end
+
 
 to update-displays
   ask turtles [ set label who ]
@@ -376,46 +402,56 @@ to go
 
   ; --- Manage Traffic (Gate Assignments, Departures) ---
   manage-traffic
+  ask patches with [lock-ticks > 0] [ set lock-ticks lock-ticks - 1 ]
+
 
   ; --- Update Plane Positions based on their state ---
   ask planes [
     if current-state = "flying" [
-      ; Flying planes move towards the runway
       let target closest-runway
       ifelse distance target < 1 [
-        move-to target
-        set current-state "landed"
+        ;; only touch down if the runway patch is clear
+        if patch-clear? target [
+          move-to target
+          set current-state "landed"
+        ]
+        ;; else: hold this tick (do nothing)
       ] [
         face target
         fd 0.5
       ]
     ]
+
     if current-state = "landed" [
       set current-state "taxiing"
       ; No movement here, just state transition.
       ; The next 'go' tick will handle taxiing.
     ]
     if current-state = "taxiing" [
-      ; Taxiing planes move towards their assigned gate
       ifelse member? patch-here gate-patches [
-        ; Check if this is the *correct* assigned gate
         if patch-here = gate-assigned [
+          ask patch-here [
+            set gate-occupied-by [self] of myself
+            set gate-reserved-by nobody
+          ]
           set current-state "waiting"
           set wait-counter 10
         ]
-        ; If it's a gate but not the assigned one, it should have been prevented.
-        ; If somehow it is, it might wait or need special handling.
-        ; For now, assume it's the correct one if it's a gate.
       ] [
         taxi-to-gate
       ]
     ]
+
     if current-state = "waiting" [
       set wait-counter wait-counter - 1
       if wait-counter <= 0 [
+        set last-patch nobody          ;; <— allow stepping off the gate
         set current-state "departing"
+        free-my-gate
       ]
     ]
+
+
     if current-state = "departing" [
       ; Departing planes move towards the runway
       ; Once on a runway, it has "departed"
@@ -427,7 +463,7 @@ to go
       ]
     ]
     if current-state = "departed" [
-      fd 1
+      fd-safe 1
       if xcor <= min-pxcor or xcor >= max-pxcor or
          ycor <= min-pycor or ycor >= max-pycor [
         respawn-plane
@@ -463,40 +499,112 @@ to go
 end
 
 to taxi-to-runway
+  ;; free, unlocked neighbors only
   let options neighbors4 with [
-    member? self navigable-patches
+    member? self navigable-patches and lock-ticks = 0 and not any? turtles-here
   ]
-  if any? options [
-    let target-runway min-one-of runway-patches [distance myself]
-    let next-patch min-one-of options [distance target-runway]
-    ; Check for collision before moving
-    if not any? turtles-on next-patch [
-       face next-patch
-       move-to next-patch
+
+  ;; prefer not to U-turn, but allow it if boxed in
+  let cand options
+  if last-patch != nobody [
+    set cand cand with [ self != [last-patch] of myself ]
+    if not any? cand [ set cand options ]       ;; fallback: allow backtrack
+  ]
+
+  if any? cand [
+    let target-runway min-one-of runway-patches [ distance myself ]
+    let myhd heading
+    ;; scalar score = distance + tiny turn cost
+    let next-patch min-one-of cand [
+      (distance target-runway) +
+      0.001 * abs subtract-headings myhd ((towards myself + 180) mod 360)
     ]
-    ; If next patch is occupied, the plane simply waits (does nothing) this tick.
+    let prev patch-here
+    face next-patch
+    move-to next-patch
+    set last-patch prev
+    ask patch-here [ set lock-ticks 2 ]
   ]
 end
 
 to taxi-to-gate
-  let options neighbors4 with [member? self navigable-patches]
-  if any? options [
-    ; Move towards the assigned gate
-    let target-gate gate-assigned
-    if target-gate != nobody [
-      let next-patch min-one-of options [distance target-gate]
-      ; Check for collision before moving
-      if not any? turtles-on next-patch [
-         face next-patch
-         move-to next-patch
+  ;; free, unlocked neighbors only
+  let options neighbors4 with [
+    member? self navigable-patches and lock-ticks = 0 and not any? turtles-here
+  ]
+
+  ;; prefer not to U-turn, but allow it if boxed in
+  let cand options
+  if last-patch != nobody [
+    set cand cand with [ self != [last-patch] of myself ]
+    if not any? cand [ set cand options ]     ;; fallback: allow backtrack
+  ]
+
+  if any? cand [
+    let tgt gate-assigned
+    if tgt != nobody [
+      let myhd heading
+      let next-patch min-one-of cand [
+        (distance tgt) +
+        0.001 * abs subtract-headings myhd ((towards myself + 180) mod 360)
       ]
-      ; If next patch is occupied, the plane simply waits (does nothing) this tick.
+
+      ifelse [gate?] of next-patch
+      [
+        ;; strict gate entry: only the reserver, and gate must be empty
+        ifelse (next-patch = tgt) and
+               ([gate-occupied-by] of next-patch = nobody) and
+               ([gate-reserved-by] of next-patch = self)
+        [
+          let prev patch-here
+          face next-patch
+          move-to next-patch
+          set last-patch prev
+          ask patch-here [ set lock-ticks 2 ]
+        ]
+        [
+          ;; can't step on the gate now -> pick a non-gate neighbor instead
+          let cand2 cand with [ not [gate?] of self ]
+          if any? cand2 [
+            let alt min-one-of cand2 [
+              (distance tgt) +
+              0.001 * abs subtract-headings myhd ((towards myself + 180) mod 360)
+            ]
+            let prev patch-here
+            face alt
+            move-to alt
+            set last-patch prev
+            ask patch-here [ set lock-ticks 2 ]
+          ]
+        ]
+      ]
+      [
+        ;; non-gate patch
+        let prev patch-here
+        face next-patch
+        move-to next-patch
+        set last-patch prev
+        ask patch-here [ set lock-ticks 2 ]
+      ]
     ]
   ]
 end
 
+
+
+to free-my-gate
+  if gate-assigned != nobody [
+    ask gate-assigned [
+      if gate-occupied-by = myself [ set gate-occupied-by nobody ]
+      if gate-reserved-by = myself [ set gate-reserved-by nobody ]
+    ]
+  ]
+end
+
+
 to respawn-plane
-  setxy random-xcor (max-pycor + 5)  ; appear off top edge
+  setxy random-xcor (max-pycor + 5)
+  set last-patch patch-here
   set current-state "flying"
   set color blue
   set shape "airplane"
@@ -509,17 +617,18 @@ to respawn-plane
 end
 
 to color-by-state
-  if current-state = "ready"     [ set color green ]
-  if current-state = "taxiing"   [ set color orange ]
-  if current-state = "waiting"   [ set color yellow ]
-  if current-state = "emergency" [ set color red ]
-  if current-state = "departing" [ set color blue - 2 ]
-  if current-state = "departed"  [ set color gray ]
-  if current-state = "flying"    [ set color blue ]
-  if current-state = "landed"    [ set color magenta ]
-  if current-state = "parked"    [ set color white ]
-  if current-state = "to-runway" [ set color cyan ]
+  if current-state = "ready"     [ set color c-ready ]
+  if current-state = "taxiing"   [ set color c-taxiing ]
+  if current-state = "waiting"   [ set color c-waiting ]
+  if current-state = "emergency" [ set color c-emergency ]
+  if current-state = "departing" [ set color c-departing ]
+  if current-state = "departed"  [ set color c-departed ]
+  if current-state = "flying"    [ set color c-flying ]
+  if current-state = "landed"    [ set color c-landed ]
+  if current-state = "parked"    [ set color c-parked ]
+  if current-state = "to-runway" [ set color c-to-runway ]
 end
+
 
 to-report closest-runway
   report min-one-of runway-patches [distance myself]
@@ -546,15 +655,27 @@ to taxi-randomly
   ]
 end
 ; --- End taxi-randomly ---
+
+; --- End taxi-randomly ---
+
+; --- Utilities (safe patch check + safe forward) ---
+to-report patch-clear? [p]
+  report (p != nobody) and (not any? turtles-on p) and ([lock-ticks] of p = 0)
+end
+
+to fd-safe [d]
+  let p patch-ahead d
+  if patch-clear? p [ fd d ]
+end
 @#$#@#$#@
 GRAPHICS-WINDOW
-1310
-46
-2471
-922
+640
+22
+2262
+1247
 -1
 -1
-11.42
+9.5545
 1
 6
 1
@@ -575,10 +696,10 @@ ticks
 30.0
 
 BUTTON
-1095
-51
-1265
-103
+337
+47
+507
+99
 setup
 setup
 NIL
@@ -592,10 +713,10 @@ NIL
 1
 
 BUTTON
-1096
-126
-1268
-176
+339
+122
+511
+172
 go
 go
 T
@@ -609,10 +730,10 @@ NIL
 1
 
 MONITOR
-1103
-212
-1161
-257
+345
+209
+403
+254
 Flying
 count planes with [current-state = \"flying\"]
 17
@@ -620,10 +741,10 @@ count planes with [current-state = \"flying\"]
 11
 
 MONITOR
-1105
-293
-1163
-338
+347
+289
+405
+334
 Landed
 count planes with [current-state = \"taxiing\"]
 17
@@ -631,10 +752,10 @@ count planes with [current-state = \"taxiing\"]
 11
 
 MONITOR
-1103
-377
-1161
-422
+345
+374
+403
+419
 Waiting
 count planes with [current-state = \"waiting\"]
 17
@@ -642,10 +763,10 @@ count planes with [current-state = \"waiting\"]
 11
 
 MONITOR
-1112
-455
-1180
-500
+355
+450
+423
+495
 Departing
 count planes with [current-state = \"departing\"]
 17
@@ -653,10 +774,10 @@ count planes with [current-state = \"departing\"]
 11
 
 MONITOR
-1120
-534
-1185
-579
+362
+530
+427
+575
 Departed
 count planes with [current-state = \"departed\"]
 17
@@ -664,45 +785,45 @@ count planes with [current-state = \"departed\"]
 11
 
 SLIDER
-1109
-633
-1282
-666
+352
+629
+525
+662
 set-planes
 set-planes
 0
 100
-9.0
+13.0
 1
 1
 NIL
 HORIZONTAL
 
 CHOOSER
-919
-64
-1057
-109
+162
+60
+300
+105
 time-of-day
 time-of-day
 "midday" "evening" "morning" "night"
 1
 
 CHOOSER
-925
-131
-1063
-176
+167
+127
+305
+172
 weather-condition
 weather-condition
 "fog" "clear" "rain" "snow"
 1
 
 CHOOSER
-827
-235
-965
-280
+70
+230
+208
+275
 season
 season
 "peak" "off-peak"
