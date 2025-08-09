@@ -552,25 +552,6 @@ to respawn-plane
   color-by-state
 end
 
-to color-by-state
-  if current-state = "ready"     [ set color c-ready ]
-  if current-state = "taxiing"   [ set color c-taxiing ]
-  if current-state = "emergency" [ set color c-emergency ]
-  if current-state = "departing" [ set color c-departing ]
-  if current-state = "departed"  [ set color c-departed ]
-  if current-state = "flying" [
-    if plane-type = "arriving" [ set color sky + 3 ]
-    if plane-type != "arriving" [ set color c-flying ]
-  ]
-  if current-state = "landed"    [ set color c-landed ]
-  if current-state = "to-runway" [ set color c-to-runway ]
-  if current-state = "waiting" [
-    if not fueled? [ set color c-fueling ]
-    if fueled? and passengers < 50 [ set color c-boarding ]
-    if fueled? and passengers >= 50 [ set color c-waiting ]
-  ]
-  if current-state = "parked"    [ set color c-parked ]
-end
 
 to fd-safe [d]
   let p patch-ahead d
