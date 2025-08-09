@@ -19,6 +19,9 @@ globals [
   weather-speed-multiplier base-arrival-interval base-departure-interval
 
   c-boarding c-fueling c-ready c-taxiing c-waiting c-emergency c-departing c-departed c-flying c-landed c-parked c-to-runway
+
+  unboarded-passengers
+  boarded-passengers
 ]
 
 planes-own [
@@ -64,6 +67,9 @@ to setup
   set base-arrival-interval 20
   set base-departure-interval 25
 
+  set unboarded-passengers 0
+  set boarded-passengers 0
+
   setup-colors
   setup-airport-layout
   setup-agents-mixed
@@ -104,8 +110,7 @@ to setup-airport-layout
   ask patches [ set pcolor rgb item 0 base-col item 1 base-col item 2 base-col ]
 
   set runway-patches patches with [
-    (pycor = 25 and pxcor >= 20 and pxcor <= 80) or
-    (pxcor = 50 and pycor >= 35 and pycor <= 55)
+    (pycor = 25 and pxcor >= 20 and pxcor <= 80)
   ]
   ask runway-patches [ set pcolor blue + 2 ]
 
@@ -176,6 +181,15 @@ to setup-airport-layout
   ask patches with [
     pxcor = min-pxcor or pxcor = max-pxcor or pycor = min-pycor or pycor = max-pycor
   ] [ set pcolor red - 2 ]
+
+  set taxiway-patches (patch-set taxiway-patches patches with [
+    pycor = 58 and (pxcor = 15 or pxcor = 25 or pxcor = 35 or pxcor = 65 or pxcor = 75 or pxcor = 85)
+  ])
+  ask patches with [ pycor = 58 and (pxcor = 15 or pxcor = 25 or pxcor = 35 or pxcor = 65 or pxcor = 75 or pxcor = 85) ] [
+    set pcolor gray
+  ] ;override intersection
+
+
 end
 
 ; =========================
@@ -353,6 +367,9 @@ to go
             set passengers passengers + 1
             if passengers >= 50 [ set boarded? true ]
           ]
+          set unboarded-passengers unboarded-passengers - 1
+          set boarded-passengers boarded-passengers + 1
+
           die
         ]
       ]
@@ -415,7 +432,14 @@ to go
     ]
 
     if current-state = "departing" [
-      ifelse member? patch-here runway-patches [ set current-state "departed" set color gray ]
+      ifelse member? patch-here runway-patches [
+        set current-state "departed"
+        set color gray
+        ; The plane is taking off, so its passengers are no longer "boarded"
+        ; in the airport context. Update the counter.
+        set boarded-passengers boarded-passengers - passengers
+        set passengers 0  ; reset passengers for the next flight
+      ]
       [ taxi-to-runway ]
     ]
 
@@ -431,7 +455,14 @@ to go
     ]
 
     if current-state = "to-runway" [
-      ifelse member? patch-here runway-patches [ set current-state "departed" set color gray ]
+      ifelse member? patch-here runway-patches [
+        set current-state "departed"
+        set color gray
+        ; The plane is taking off, so its passengers are no longer "boarded"
+        ; in the airport context. Update the counter.
+        set boarded-passengers boarded-passengers - passengers
+        set passengers 0  ; reset passengers for the next flight
+      ]
       [ taxi-to-runway ]
     ]
 
@@ -610,6 +641,8 @@ to schedule-new-arrival
     set total-arrivals total-arrivals + 1
     set total-flights-handled total-flights-handled + 1
     set flights-this-hour flights-this-hour + 1
+    ; All new customers are initially unboarded.
+    set unboarded-passengers unboarded-passengers + pax-count
   ]
   set next-arrival-time ticks + calculate-arrival-interval
 end
@@ -841,6 +874,28 @@ season
 season
 "peak" "off-peak"
 1
+
+MONITOR
+196
+383
+337
+428
+NIL
+unboarded-passengers
+17
+1
+11
+
+MONITOR
+206
+444
+333
+489
+NIL
+boarded-passengers
+17
+1
+11
 
 @#$#@#$#@
 ## WHAT IS IT?
