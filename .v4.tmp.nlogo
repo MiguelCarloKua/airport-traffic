@@ -365,7 +365,7 @@ to go
   ;; =========================
   ;; CUSTOMERS (PASSENGERS)
   ;; =========================
-  let passenger-speed passenger-modify-speed
+  let passenger-speed 0.45
   let active-pads (boarding-patches with [ has-boarding-plane? ])
   ask customers [
     if shape != "arrow" [ set shape "arrow" ]
@@ -1354,21 +1354,6 @@ continuous-spawn?
 0
 1
 -1000
-
-SLIDER
-4
-422
-189
-455
-passenger-modify-speed
-passenger-modify-speed
-0.1
-2
-0.45
-0.1
-1
-NIL
-HORIZONTAL
 
 @#$#@#$#@
 ## WHAT IS IT?
