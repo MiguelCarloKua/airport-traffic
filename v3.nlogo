@@ -19,7 +19,7 @@ globals [
   weather-speed-multiplier base-arrival-interval base-departure-interval
 
   arrival-gate-patches
-  hangar-capacity hangar-slots
+  hangar-capacity hangar-slots terminal-capacity
 
   c-boarding c-fueling c-ready c-taxiing c-waiting c-emergency c-departing c-departed c-flying c-landed c-parked c-to-runway
 ]
@@ -74,8 +74,11 @@ to setup
   setup-colors
   setup-airport-layout
 
-  set hangar-capacity 20
+  set hangar-capacity 25
   set hangar-slots n-of hangar-capacity hangar-patches
+
+  ;; terminal pool target
+  set terminal-capacity 200
 
   setup-shapes
   setup-agents-mixed
@@ -333,7 +336,6 @@ end
 ; =========================
 ; MAIN LOOP
 ; =========================
-
 to go
   ;; --- global updates ---
   set-weather-effects
@@ -345,29 +347,27 @@ to go
 
   ask patches with [ lock-ticks > 0 ] [ set lock-ticks lock-ticks - 1 ]
 
-  ;; spawn boarding passengers first so they can move this tick
-  spawn-terminal-passengers
+  ;; keep terminal stocked up to 200 boarding passengers (no more)
+  ensure-terminal-stock
 
   ;; =========================
   ;; CUSTOMERS (PASSENGERS)
   ;; =========================
   let passenger-speed 0.45
+  let active-pads (boarding-patches with [ has-boarding-plane? ])
   ask customers [
     if shape != "arrow" [ set shape "arrow" ]
     if size < 1.2 [ set size 1.2 ]
     if color = black [ ifelse purpose = "arrive" [ set color blue ] [ set color yellow ] ]
 
-    ;; -------- destination selection / retarget --------
+    ;; -------- destination selection / retarget every tick --------
     if purpose = "board" [
-      let active-pads (boarding-patches with [ has-boarding-plane? ])
       ifelse any? active-pads [
         let nearest min-one-of active-pads [ distance myself ]
         set destination-gate nearest
       ] [
-        ;; no active gate → wait at terminal
-        if (destination-gate = nobody) or not member? destination-gate terminal-patches [
-          set destination-gate one-of terminal-patches
-        ]
+        ;; no active gates -> wait at terminal
+        set destination-gate one-of terminal-patches
       ]
     ]
     if purpose = "arrive" [
@@ -377,12 +377,13 @@ to go
     ;; -------- movement --------
     if destination-gate != nobody [
       face destination-gate
-      if distance destination-gate > 0.5 [
+      ifelse distance destination-gate > 0.5 [
         fd passenger-speed
-      ] else [
+      ] [
         ;; -------- arrival actions --------
-        ;; boarding at purple patch (only if plane is really boarding)
-        if (purpose = "board") and member? destination-gate boarding-patches [
+
+        ;; Boarding at purple patch: board only if there is still a boarding plane
+        if (purpose = "board") and [boarding-lane?] of destination-gate [
           if [has-boarding-plane?] of destination-gate [
             let gate-patch patch ([pxcor] of destination-gate) (([pycor] of destination-gate) + 1)
             let plane-here [gate-occupied-by] of gate-patch
@@ -391,9 +392,13 @@ to go
               die
             ]
           ]
+          ;; if no plane anymore, next tick we’ll retarget back to terminal
         ]
-        ;; arrivals reaching terminal → despawn
-        if (purpose = "arrive") and member? destination-gate terminal-patches [ die ]
+
+        ;; Arrivals reaching terminal → despawn (they don't count in the 200 pool)
+        if (purpose = "arrive") and ([pcolor] of destination-gate = black) [
+          die
+        ]
       ]
     ]
   ]
@@ -453,7 +458,7 @@ to go
     ;; ---------- TAXIING ----------
     if current-state = "taxiing" [
       ;; reached a gate
-      if member? patch-here gate-patches and patch-here = gate-assigned [
+      if [gate?] of patch-here and patch-here = gate-assigned [
         if (phase = "arrival") and (passengers > 0) [
           ask patch-here [ set gate-occupied-by myself set gate-reserved-by nobody ]
           set current-state "deplaning"
@@ -523,8 +528,7 @@ to go
 
     ;; ---------- BOARDING ----------
     if current-state = "boarding" [
-      ;; IMPORTANT: do NOT auto-add passengers here.
-      ;; Boarding only increases when yellow customers arrive and board.
+      ;; don't auto-add: only yellow customers can increase passengers.
       if passengers >= 50 [
         set pushback-remaining 3
         set current-state "pushback"
@@ -568,31 +572,22 @@ end
 ; PASSENGER SPAWN (terminal -> boarding)
 ; =========================
 
-to spawn-terminal-passengers
-  let needy planes with [
-    current-state = "boarding" and
-    gate-assigned != nobody and
-    passengers < 50
+to ensure-terminal-stock
+  ;; count boarding-purpose customers currently inside the terminal
+  let terminal-boarders count customers with [
+    purpose = "board" and [pcolor] of patch-here = black
   ]
-  foreach sort needy [
-    p ->
-    let g [gate-assigned] of p
-    let b patch ([pxcor] of g) (([pycor] of g) - 1)  ;; purple boarding patch
-
-    ;; NEW: skip if this pad no longer has a boarding plane (safety)
-    if not [has-boarding-plane?] of b [ stop ]
-
-    let need 50 - [passengers] of p
-    let n min list need (1 + random (pax-board-rate * 2))
-    if n > 0 [
-      create-customers n [
-        move-to one-of terminal-patches
-        set shape "arrow"
-        set size 1.2
-        set color yellow
-        set purpose "board"
-        set destination-gate b
-      ]
+  let deficit terminal-capacity - terminal-boarders
+  if deficit > 0 [
+    ;; throttle to avoid a giant burst in one tick
+    let n min list deficit 40
+    create-customers n [
+      move-to one-of terminal-patches
+      set shape "arrow"
+      set size 1.2
+      set color yellow
+      set purpose "board"
+      set destination-gate one-of terminal-patches
     ]
   ]
 end
@@ -847,7 +842,7 @@ to-report free-arrival-gate
 end
 
 to-report hangar-has-space?
-  report (count turtles-on hangar-slots) < hangar-capacity
+  report (count planes with [ member? patch-here hangar-slots ]) < hangar-capacity
 end
 
 to-report pick-free-hangar-slot
