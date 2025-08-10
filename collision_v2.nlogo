@@ -210,8 +210,7 @@ to setup-agents-mixed
 
   let n max list 0 set-planes
   let n-flying   round (n * 0.34)
-  let n-waiting  round (n * 0.33)
-  let n-taxiing  n - n-flying - n-waiting
+  let n-taxiing  round (n * 0.66)  ; Combine remaining planes into taxiing
 
   ;; Arrivals start flying
   repeat n-flying [
@@ -228,28 +227,6 @@ to setup-agents-mixed
       set gate-assigned nobody
       set destination nobody
       color-by-state
-    ]
-  ]
-
-  ;; Departures at gates
-  let free-gates gate-patches with [ gate-occupied-by = nobody and gate-reserved-by = nobody ]
-  repeat n-waiting [
-    if any? free-gates [
-      let g one-of free-gates
-      set free-gates other free-gates with [ self != g ]
-      create-planes 1 [
-        move-to g
-        ask g [ set gate-occupied-by myself ]
-        set shape "airplane" set size 1.5
-        set plane-type "departing" set current-state "waiting"
-        set base-speed 0.5 set current-speed base-speed
-        set gate-assigned g set destination g
-        set passengers 0
-        set phase "turnaround"
-        set boarded? false
-        set fueled? false
-        color-by-state
-      ]
     ]
   ]
 
@@ -424,7 +401,7 @@ to go
         let slot one-of hangar-patches with [ not any? turtles-here ]
         ifelse slot != nobody [
           set gate-assigned slot
-          set destination slot        ; ← Critical: set destination
+          set destination slot
           set current-state "taxiing"
         ] [
           set current-state "flying"
@@ -496,8 +473,10 @@ to go
       set fueling-remaining fueling-remaining - 1
       if fueling-remaining <= 0 [
         ask patch-here [ if fuelpad-occupied-by = myself [ set fuelpad-occupied-by nobody ] ]
-        set destination gate-assigned
-        set current-state "taxiing"
+        let gate-patch gate-assigned
+        let boarding-lane patch ([pxcor] of gate-patch) (([pycor] of gate-patch) - 1)
+        set destination boarding-lane
+        set current-state "boarding"
       ]
     ]
 
@@ -631,7 +610,7 @@ to taxi-to-gate
     if not any? cand [ set cand options ]
   ]
   if any? cand [
-    let tgt destination  ; ← Use destination, not gate-assigned
+    let tgt destination
     let myhd heading
     let next-patch min-one-of cand [
       distance tgt + 0.001 * abs subtract-headings myhd ((towards myself + 180) mod 360)
@@ -687,7 +666,7 @@ to color-by-state
     if fueled? and passengers < 50 [ set color c-boarding ]
     if fueled? and passengers >= 50 [ set color c-waiting ]
   ]
-  if current-state = "parked"    [ set color c-parked ] ; White
+  if current-state = "parked"    [ set color c-parked ]
 end
 
 to schedule-new-arrival
@@ -717,31 +696,28 @@ to schedule-new-arrival
 end
 
 to schedule-new-departure
-  let g reserve-free-gate 60
-  if g != nobody [
-    create-planes 1 [
-      move-to g
-      ask g [ set gate-occupied-by myself ]
-      set last-patch patch-here
-      set color white
-      set shape "airplane"
-      set size 1.5
-      set plane-type "departing"
-      set current-state "waiting"
-      set base-speed 0.5
-      set flight-id word "DEP_" (random 10000)
-      set destination g
-      set gate-assigned g
-      set passengers 0
-      set phase "turnaround"
-      set boarded? false
-      set fueled? false
-      color-by-state
-    ]
-    set total-departures total-departures + 1
-    set total-flights-handled total-flights-handled + 1
-    set flights-this-hour flights-this-hour + 1
+  create-planes 1 [
+    setxy random-xcor (max-pycor + 5)
+    set last-patch patch-here
+    set color white
+    set shape "airplane"
+    set size 1.5
+    set plane-type "departing"
+    set current-state "flying"
+    set base-speed 0.5
+    set current-speed base-speed
+    set flight-id word "DEP_" (random 10000)
+    set passengers 50
+    set phase "turnaround"
+    set boarded? false
+    set fueled? false
+    set gate-assigned nobody
+    set destination nobody
+    color-by-state
   ]
+  set total-departures total-departures + 1
+  set total-flights-handled total-flights-handled + 1
+  set flights-this-hour flights-this-hour + 1
   set next-departure-time ticks + calculate-departure-interval
 end
 
