@@ -22,6 +22,8 @@ globals [
   hangar-capacity hangar-slots terminal-capacity
 
   c-boarding c-fueling c-ready c-taxiing c-waiting c-emergency c-departing c-departed c-flying c-landed c-parked c-to-runway
+
+  total-passengers passengers-onboard passengers-walking passenger-cap
 ]
 
 planes-own [
@@ -87,6 +89,8 @@ to setup
   setup-agents-mixed
   schedule-initial-flights
   set-weather-effects
+
+  set passenger-cap passenger-modify-cap
 end
 
 to setup-shapes
@@ -544,14 +548,17 @@ to go
     if current-state = "deplaning" [
       let n min list passengers pax-offload-rate
       if n > 0 [
-        ask patch-here [
-          sprout n [
-            set breed customers
-            set shape "arrow"
-            set size 1.2
-            set color blue
-            set purpose "arrive"
-            set destination-gate one-of terminal-patches
+        let allowed (passenger-cap - total-passengers)
+        if allowed > 0 [
+          ask patch-here [
+            sprout n [
+              set breed customers
+              set shape "arrow"
+              set size 1.2
+              set color blue
+              set purpose "arrive"
+              set destination-gate one-of terminal-patches
+            ]
           ]
         ]
         set passengers passengers - n
@@ -615,6 +622,9 @@ to go
     color-by-state
   ]
   update-plane-state-plot
+  set total-passengers (sum [passengers] of planes) + (count customers)
+  set passengers-onboard (sum [passengers] of planes)
+  set passengers-walking (count customers)
   tick
 end
 
@@ -628,7 +638,8 @@ to ensure-terminal-stock
     purpose = "board" and [pcolor] of patch-here = black
   ]
   let deficit terminal-capacity - terminal-boarders
-  if deficit > 0 [
+  let allowed (passenger-cap - total-passengers)
+  if deficit > 0 and allowed > 0 [
     ;; throttle to avoid a giant burst in one tick
     let n min list deficit passenger-spawn-rate
     create-customers n [
@@ -1035,9 +1046,9 @@ NIL
 
 MONITOR
 314
-240
+303
 372
-285
+348
 Flying
 count planes with [current-state = \"flying\"]
 17
@@ -1046,9 +1057,9 @@ count planes with [current-state = \"flying\"]
 
 MONITOR
 314
-189
+252
 372
-234
+297
 Taxiing
 count planes with [current-state = \"taxiing\"]
 17
@@ -1057,9 +1068,9 @@ count planes with [current-state = \"taxiing\"]
 
 MONITOR
 379
-190
+253
 437
-235
+298
 Waiting
 count planes with [current-state = \"waiting\"]
 17
@@ -1068,9 +1079,9 @@ count planes with [current-state = \"waiting\"]
 
 MONITOR
 313
-340
+403
 381
-385
+448
 Departing
 count planes with [current-state = \"departing\"]
 17
@@ -1079,9 +1090,9 @@ count planes with [current-state = \"departing\"]
 
 MONITOR
 386
-339
+402
 451
-384
+447
 Departed
 count planes with [current-state = \"departed\"]
 17
@@ -1135,9 +1146,9 @@ season
 
 MONITOR
 381
-290
+353
 438
-335
+398
 Fueling
 count planes with [current-state = \"fueling\"]
 17
@@ -1146,9 +1157,9 @@ count planes with [current-state = \"fueling\"]
 
 MONITOR
 314
-290
+353
 376
-335
+398
 Landed
 count planes with [current-state = \"landed\"]
 17
@@ -1157,9 +1168,9 @@ count planes with [current-state = \"landed\"]
 
 MONITOR
 376
-137
+200
 438
-182
+245
 Boarding
 count planes with [current-state = \"boarding\"]
 17
@@ -1168,9 +1179,9 @@ count planes with [current-state = \"boarding\"]
 
 MONITOR
 377
-241
+304
 450
-286
+349
 To-runway
 count planes with [current-state = \"to-runway\"]
 17
@@ -1179,9 +1190,9 @@ count planes with [current-state = \"to-runway\"]
 
 MONITOR
 314
-137
+200
 372
-182
+245
 Ready
 count planes with [current-state = \"ready\"]
 17
@@ -1190,9 +1201,9 @@ count planes with [current-state = \"ready\"]
 
 MONITOR
 313
-390
+453
 370
-435
+498
 Holding
 count planes with [current-state = \"holding\"]
 17
@@ -1201,9 +1212,9 @@ count planes with [current-state = \"holding\"]
 
 MONITOR
 375
-390
+453
 455
-435
+498
 Holding-Half
 count planes with [current-state = \"holding-half\"]
 17
@@ -1212,9 +1223,9 @@ count planes with [current-state = \"holding-half\"]
 
 MONITOR
 312
-439
+502
 386
-484
+547
 Emergency
 count planes with [current-state = \"emergency\"]
 17
@@ -1223,9 +1234,9 @@ count planes with [current-state = \"emergency\"]
 
 MONITOR
 389
-439
+502
 459
-484
+547
 Deplaining
 count planes with [current-state = \"deplaining\"]
 17
@@ -1234,9 +1245,9 @@ count planes with [current-state = \"deplaining\"]
 
 MONITOR
 312
-486
+549
 377
-531
+594
 Pushback
 count planes with [current-state = \"pushback\"]
 17
@@ -1245,9 +1256,9 @@ count planes with [current-state = \"pushback\"]
 
 MONITOR
 382
-487
+550
 439
-532
+595
 Parked
 count planes with [current-state = \"Parked\"]
 17
@@ -1351,7 +1362,7 @@ SWITCH
 597
 continuous-spawn?
 continuous-spawn?
-0
+1
 1
 -1000
 
@@ -1364,8 +1375,67 @@ passenger-modify-speed
 passenger-modify-speed
 0.1
 2
-0.45
+0.5
 0.1
+1
+NIL
+HORIZONTAL
+
+MONITOR
+312
+611
+420
+656
+Total Passengers
+total-passengers
+17
+1
+11
+
+MONITOR
+312
+660
+444
+705
+Passengers On Board
+passengers-onboard
+17
+1
+11
+
+MONITOR
+312
+707
+435
+752
+Passengers Walking
+passengers-walking
+17
+1
+11
+
+MONITOR
+312
+149
+392
+194
+Total Planes
+count planes
+17
+1
+11
+
+SLIDER
+5
+603
+192
+636
+passenger-modify-cap
+passenger-modify-cap
+0
+10000
+1000.0
+100
 1
 NIL
 HORIZONTAL
