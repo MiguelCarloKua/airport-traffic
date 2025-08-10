@@ -86,6 +86,7 @@ to setup-colors
   set c-fueling    rgb 255 160 60
 end
 
+
 ; =========================
 ; LAYOUT
 ; =========================
@@ -311,11 +312,15 @@ to go
 
   manage-traffic
 
-  spawn-passengers-for-waiting-planes  ; ✅ Only spawn for planes that are WAITING and need passengers
+  ; ✅ Check for free gates and activate parked planes
+  activate-parked-plane-if-gate-free
+
+  ; ✅ Continuously spawn passengers for eligible waiting planes
+  spawn-passengers-for-waiting-planes
 
   ask patches with [lock-ticks > 0] [ set lock-ticks lock-ticks - 1 ]
 
-  ; ✅ Boarding logic
+  ; ✅ Boarding: customers go to boarding lane and board if plane is waiting and has space
   ask customers [
     if destination-gate = nobody [ set destination-gate one-of boarding-patches ]
     face destination-gate
@@ -328,12 +333,12 @@ to go
           set passengers passengers + 1
           if passengers >= 50 [ set boarded? true ]
         ]
-        die
+        die  ; Passenger boards and disappears
       ]
     ]
   ]
 
-  ; Fueling
+  ; Fueling: add fueler if needed
   ask planes with [current-state = "waiting" and not fueled?] [
     if not any? fuelers with [assigned-gate = [gate-assigned] of myself] [
       hatch-fuelers 1 [
@@ -403,10 +408,46 @@ to go
   tick
 end
 
+; ✅ Try to activate one parked plane if a gate is free
+to activate-parked-plane-if-gate-free
+  ; Look for any free gate
+  let free-gate one-of gate-patches with [
+    gate-occupied-by = nobody and
+    gate-reserved-by = nobody
+  ]
+
+  ; Look for any parked plane in hangar
+  let parked-plane one-of planes with [
+    current-state = "parked" and
+    patch-here != nobody and
+    member? patch-here hangar-patches
+  ]
+
+  ; If both exist, assign gate and start taxiing
+  if free-gate != nobody and parked-plane != nobody [
+    ask parked-plane [
+      set gate-assigned free-gate
+      set destination free-gate
+      set current-state "taxiing"
+      set last-patch patch-here
+      move-to one-of taxiway-patches  ; Start moving toward gate
+      color-by-state
+    ]
+    ask free-gate [ set gate-reserved-by parked-plane ]
+  ]
+end
+
 ; ✅ Only spawn passengers for planes that are WAITING and need boarding
 to spawn-passengers-for-waiting-planes
-  if random-float 1 < 0.15 [  ; spawn occasionally
-    let eligible-planes planes with [ current-state = "waiting" and boarded? = false and passengers < 50 ]
+  ; Spawn occasionally
+  if random-float 1 < 0.15 [
+    ; Find planes that are waiting and need passengers
+    let eligible-planes planes with [
+      current-state = "waiting" and
+      boarded? = false and
+      passengers < 50
+    ]
+
     if any? eligible-planes [
       let p one-of eligible-planes
       let g [gate-assigned] of p
@@ -418,7 +459,7 @@ to spawn-passengers-for-waiting-planes
           move-to one-of terminal-patches
           set color white
           set size 0.8
-          set destination-gate patch ([pxcor] of g) ([pycor] of g - 1)  ; correct boarding lane
+          set destination-gate patch ([pxcor] of g) ([pycor] of g - 1)  ; Correct boarding lane
         ]
       ]
     ]
@@ -426,7 +467,7 @@ to spawn-passengers-for-waiting-planes
 end
 
 ; =========================
-; TRAFFIC HELPERS
+; TRAFFIC / MOVEMENT HELPERS
 ; =========================
 
 to manage-traffic
@@ -566,8 +607,11 @@ to fd-safe [d]
 end
 
 to schedule-new-arrival
+  ; Try to assign a gate
   let g reserve-free-gate 60
-  if g != nobody [
+
+  ifelse g != nobody
+  [ ; ✅ Gate available: land and taxi
     create-planes 1 [
       setxy random-xcor (max-pycor + 5)
       set last-patch patch-here
@@ -583,13 +627,36 @@ to schedule-new-arrival
       set passengers 0
       set boarded? false
       set fueled? false
-      ask g [ set gate-reserved-by myself ]
+      ask g [ set gate-reserved-by myself ]  ; Reserve the gate
       color-by-state
     ]
     set total-arrivals total-arrivals + 1
     set total-flights-handled total-flights-handled + 1
     set flights-this-hour flights-this-hour + 1
   ]
+  [ ; ❌ No gate: go to hangar and park
+    create-planes 1 [
+      move-to one-of hangar-patches
+      set color c-parked
+      set shape "airplane"
+      set size 1.5
+      set plane-type "arriving"
+      set current-state "parked"
+      set base-speed 0.5
+      set flight-id word "ARR_" (random 10000)
+      set passengers 0
+      set boarded? false
+      set fueled? false
+      set gate-assigned nobody
+      set destination nobody
+      set last-patch patch-here
+      color-by-state
+    ]
+    set total-arrivals total-arrivals + 1
+    set total-flights-handled total-flights-handled + 1
+    set flights-this-hour flights-this-hour + 1
+  ]
+
   set next-arrival-time ticks + calculate-arrival-interval
 end
 
@@ -816,7 +883,7 @@ CHOOSER
 season
 season
 "peak" "off-peak"
-1
+0
 
 @#$#@#$#@
 ## WHAT IS IT?
