@@ -96,7 +96,7 @@ to setup-colors
   set c-departed   rgb 96 96 96
   set c-flying     rgb 0 230 180
   set c-landed     rgb 255 255 0
-  set c-parked     rgb 255 255 255
+  set c-parked     rgb 255 255 255   ; white
   set c-to-runway  rgb 0 200 0
   set c-boarding   rgb 255 170 220
   set c-fueling    rgb 255 160 60
@@ -139,8 +139,8 @@ to setup-airport-layout
 
   ;; --- connect hangar to the taxiway grid ---
   let hangar-conn patches with [
-    (pycor = 45 and pxcor >= 10 and pxcor <= 15) or   ;; horizontal spur to main grid
-    (pxcor = 10 and pycor >= 40 and pycor <= 50)      ;; vertical edge by hangar
+    (pycor = 45 and pxcor >= 10 and pxcor <= 15) or
+    (pxcor = 10 and pycor >= 40 and pycor <= 50)
   ]
   set taxiway-patches (patch-set taxiway-patches hangar-conn)
   ask hangar-conn [ set pcolor gray ]
@@ -176,7 +176,7 @@ to setup-airport-layout
   ask terminal-patches [ set pcolor black ]
 
   set boarding-patches no-patches
-  set fueling-patches  no-patches
+  set fueling-patches no-patches
   foreach sort gate-patches [
     g ->
     let gx [pxcor] of g
@@ -186,7 +186,7 @@ to setup-airport-layout
     ask b [ set pcolor violet set boarding-lane? true ]
     ask f [ set pcolor 45 set fueling-lane? true ]
     set boarding-patches (patch-set boarding-patches b)
-    set fueling-patches  (patch-set fueling-patches  f)
+    set fueling-patches (patch-set fueling-patches f)
   ]
 
   set arrival-gate-patches gate-patches
@@ -213,7 +213,7 @@ to setup-agents-mixed
   let n-waiting  round (n * 0.33)
   let n-taxiing  n - n-flying - n-waiting
 
-  ;; Arrivals start in the air with 50 pax to deplane; no pre-assigned gate
+  ;; Arrivals start flying
   repeat n-flying [
     create-planes 1 [
       setxy random-xcor (max-pycor + 5)
@@ -231,7 +231,7 @@ to setup-agents-mixed
     ]
   ]
 
-  ;; Departures waiting at gates (they will go fuel first)
+  ;; Departures at gates
   let free-gates gate-patches with [ gate-occupied-by = nobody and gate-reserved-by = nobody ]
   repeat n-waiting [
     if any? free-gates [
@@ -253,7 +253,7 @@ to setup-agents-mixed
     ]
   ]
 
-  ;; Some already taxiing to runway (e.g., after boarding)
+  ;; Already taxiing departures
   repeat n-taxiing [
     let t one-of taxiway-patches
     create-planes 1 [
@@ -335,7 +335,6 @@ end
 ; =========================
 
 to go
-  ;; --- global updates ---
   set-weather-effects
   step-weather
 
@@ -345,26 +344,20 @@ to go
 
   ask patches with [ lock-ticks > 0 ] [ set lock-ticks lock-ticks - 1 ]
 
-  ;; spawn boarding passengers first so they can move this tick
   spawn-terminal-passengers
 
-  ;; =========================
-  ;; CUSTOMERS (PASSENGERS)
-  ;; =========================
   let passenger-speed 0.45
   ask customers [
     if shape != "arrow" [ set shape "arrow" ]
     if size < 1.2 [ set size 1.2 ]
     if color = black [ ifelse purpose = "arrive" [ set color blue ] [ set color yellow ] ]
 
-    ;; -------- destination selection / retarget --------
     if purpose = "board" [
       let active-pads (boarding-patches with [ has-boarding-plane? ])
       ifelse any? active-pads [
         let nearest min-one-of active-pads [ distance myself ]
         set destination-gate nearest
       ] [
-        ;; no active gate → wait at terminal
         if (destination-gate = nobody) or not member? destination-gate terminal-patches [
           set destination-gate one-of terminal-patches
         ]
@@ -374,14 +367,11 @@ to go
       if destination-gate = nobody [ set destination-gate one-of terminal-patches ]
     ]
 
-    ;; -------- movement --------
     if destination-gate != nobody [
       face destination-gate
-      if distance destination-gate > 0.5 [
+      ifelse distance destination-gate > 0.5 [
         fd passenger-speed
-      ] else [
-        ;; -------- arrival actions --------
-        ;; boarding at purple patch (only if plane is really boarding)
+      ] [
         if (purpose = "board") and member? destination-gate boarding-patches [
           if [has-boarding-plane?] of destination-gate [
             let gate-patch patch ([pxcor] of destination-gate) (([pycor] of destination-gate) + 1)
@@ -392,7 +382,6 @@ to go
             ]
           ]
         ]
-        ;; arrivals reaching terminal → despawn
         if (purpose = "arrive") and member? destination-gate terminal-patches [ die ]
       ]
     ]
@@ -429,30 +418,24 @@ to go
       ifelse g != nobody [
         set gate-assigned g
         ask g [ set gate-reserved-by myself ]
+        set destination g
+        set current-state "taxiing"
       ] [
         let slot one-of hangar-patches with [ not any? turtles-here ]
         ifelse slot != nobody [
           set gate-assigned slot
+          set destination slot        ; ← Critical: set destination
+          set current-state "taxiing"
         ] [
           set current-state "flying"
           stop
         ]
       ]
-      set current-state "taxiing"
-    ]
-
-    ;; ---------- WAITING (departures created at a gate go fuel first) ----------
-    if current-state = "waiting" [
-      set phase "turnaround"
-      if gate-assigned != nobody [
-        set destination fuelpad-of gate-assigned
-        set current-state "taxiing"
-      ]
     ]
 
     ;; ---------- TAXIING ----------
     if current-state = "taxiing" [
-      ;; reached a gate
+      ;; Reached gate
       if member? patch-here gate-patches and patch-here = gate-assigned [
         if (phase = "arrival") and (passengers > 0) [
           ask patch-here [ set gate-occupied-by myself set gate-reserved-by nobody ]
@@ -463,29 +446,26 @@ to go
           set current-state "boarding"
         ]
       ]
-      ;; reached hangar slot
-      if member? patch-here hangar-patches and patch-here = gate-assigned [
-        if any? gate-patches with [ gate-reserved-by = nobody and gate-occupied-by = nobody ] [
-          let g2 one-of gate-patches with [ gate-reserved-by = nobody and gate-occupied-by = nobody ]
-          set gate-assigned g2
-          ask g2 [ set gate-reserved-by myself ]
+
+      ;; ✅ Reached hangar → become parked
+      if member? patch-here hangar-patches and patch-here = destination [
+        set current-state "parked"
+      ]
+
+      ;; Reached fuel pad
+      if destination != nobody and patch-here = destination and member? patch-here fueling-patches [
+        if [fuelpad-occupied-by] of patch-here = nobody or [fuelpad-occupied-by] of patch-here = self [
+          ask patch-here [ set fuelpad-occupied-by myself ]
+          set fueling-remaining fueling-time
+          set current-state "fueling"
         ]
       ]
-      ;; reached destination (fuel pad) → only if pad free or ours
-      if destination != nobody and patch-here = destination [
-        if member? patch-here fueling-patches [
-          if [fuelpad-occupied-by] of patch-here = nobody or [fuelpad-occupied-by] of patch-here = self [
-            ask patch-here [ set fuelpad-occupied-by myself ]
-            set fueling-remaining fueling-time
-            set current-state "fueling"
-          ]
-        ]
-      ]
-      ;; otherwise keep moving
+
+      ;; Keep moving
       if current-state = "taxiing" [ taxi-to-gate ]
     ]
 
-    ;; ---------- DEPLANING (blue arrows to terminal) ----------
+    ;; ---------- DEPLANING ----------
     if current-state = "deplaning" [
       let n min list passengers pax-offload-rate
       if n > 0 [
@@ -506,7 +486,7 @@ to go
         set phase "turnaround"
         let gx [pxcor] of gate-assigned
         let gy [pycor] of gate-assigned
-        set destination patch gx (gy - 2)  ;; fuel pad
+        set destination patch gx (gy - 2)
         set current-state "taxiing"
       ]
     ]
@@ -523,8 +503,6 @@ to go
 
     ;; ---------- BOARDING ----------
     if current-state = "boarding" [
-      ;; IMPORTANT: do NOT auto-add passengers here.
-      ;; Boarding only increases when yellow customers arrive and board.
       if passengers >= 50 [
         set pushback-remaining 3
         set current-state "pushback"
@@ -558,6 +536,20 @@ to go
       ]
     ]
 
+    ;; ---------- PARKED ----------
+    if current-state = "parked" [
+      if member? patch-here hangar-patches [
+        if any? gate-patches with [ gate-reserved-by = nobody and gate-occupied-by = nobody ] [
+          let g one-of gate-patches with [ gate-reserved-by = nobody and gate-occupied-by = nobody ]
+          set gate-assigned g
+          ask g [ set gate-reserved-by myself ]
+          set destination g
+          set current-state "waiting"
+        ]
+      ]
+    ]
+
+    ;; ✅ color-by-state MUST be at the END
     color-by-state
   ]
 
@@ -565,7 +557,7 @@ to go
 end
 
 ; =========================
-; PASSENGER SPAWN (terminal -> boarding)
+; PASSENGER SPAWN
 ; =========================
 
 to spawn-terminal-passengers
@@ -577,11 +569,8 @@ to spawn-terminal-passengers
   foreach sort needy [
     p ->
     let g [gate-assigned] of p
-    let b patch ([pxcor] of g) (([pycor] of g) - 1)  ;; purple boarding patch
-
-    ;; NEW: skip if this pad no longer has a boarding plane (safety)
+    let b patch ([pxcor] of g) (([pycor] of g) - 1)
     if not [has-boarding-plane?] of b [ stop ]
-
     let need 50 - [passengers] of p
     let n min list need (1 + random (pax-board-rate * 2))
     if n > 0 [
@@ -597,25 +586,14 @@ to spawn-terminal-passengers
   ]
 end
 
-
 ; =========================
-; TRAFFIC / MOVEMENT HELPERS
+; TRAFFIC HELPERS
 ; =========================
 
 to manage-traffic
   let unassigned-arrivals planes with [ plane-type = "arriving" and gate-assigned = nobody and current-state != "flying" ]
   ask unassigned-arrivals [
     let g min-one-of (gate-patches with [ gate-reserved-by = nobody and gate-occupied-by = nobody ]) [ distance myself ]
-    if g != nobody [
-      set gate-assigned g
-      set destination g
-      ask g [ set gate-reserved-by myself ]
-    ]
-  ]
-
-  let unassigned-departures planes with [ plane-type = "departing" and current-state = "ready" and gate-assigned = nobody ]
-  ask unassigned-departures [
-    let g one-of gate-patches with [ gate-reserved-by = nobody and gate-occupied-by = nobody ]
     if g != nobody [
       set gate-assigned g
       set destination g
@@ -653,55 +631,29 @@ to taxi-to-gate
     if not any? cand [ set cand options ]
   ]
   if any? cand [
-    let tgt gate-assigned
-    if tgt != nobody [
-      let myhd heading
-      let next-patch min-one-of cand [
-        (distance tgt) + 0.001 * abs subtract-headings myhd ((towards myself + 180) mod 360)
-      ]
-      ifelse [gate?] of next-patch [
-        ifelse (next-patch = tgt) and ([gate-occupied-by] of next-patch = nobody) and ([gate-reserved-by] of next-patch = self) [
-          let prev patch-here
-          face next-patch
-          move-to next-patch
-          set last-patch prev
-          ask patch-here [ set lock-ticks 2 ]
-        ] [
-          let cand2 cand with [ not [gate?] of self ]
-          if any? cand2 [
-            let alt min-one-of cand2 [ (distance tgt) + 0.001 * abs subtract-headings myhd ((towards myself + 180) mod 360) ]
-            let prev patch-here
-            face alt
-            move-to alt
-            set last-patch prev
-            ask patch-here [ set lock-ticks 2 ]
-          ]
-        ]
-      ] [
-        let prev patch-here
-        face next-patch
-        move-to next-patch
-        set last-patch prev
-        ask patch-here [ set lock-ticks 2 ]
-      ]
+    let tgt destination  ; ← Use destination, not gate-assigned
+    let myhd heading
+    let next-patch min-one-of cand [
+      distance tgt + 0.001 * abs subtract-headings myhd ((towards myself + 180) mod 360)
     ]
+    let prev patch-here
+    face next-patch
+    move-to next-patch
+    set last-patch prev
+    ask patch-here [ set lock-ticks 2 ]
   ]
 end
 
-to free-my-gate
-  if gate-assigned != nobody [
-    ask gate-assigned [
-      if gate-occupied-by = myself [ set gate-occupied-by nobody ]
-      if gate-reserved-by = myself [ set gate-reserved-by nobody ]
-    ]
-  ]
+to fd-safe [d]
+  let p patch-ahead d
+  if patch-clear? p [ fd d ]
 end
 
 to respawn-plane
   setxy random-xcor (max-pycor + 5)
   set last-patch patch-here
   set current-state "flying"
-  set color blue
+  set color sky + 3
   set shape "airplane"
   set plane-type "arriving"
   set base-speed 0.5
@@ -735,12 +687,7 @@ to color-by-state
     if fueled? and passengers < 50 [ set color c-boarding ]
     if fueled? and passengers >= 50 [ set color c-waiting ]
   ]
-  if current-state = "parked"    [ set color c-parked ]
-end
-
-to fd-safe [d]
-  let p patch-ahead d
-  if patch-clear? p [ fd d ]
+  if current-state = "parked"    [ set color c-parked ] ; White
 end
 
 to schedule-new-arrival
@@ -801,14 +748,6 @@ end
 ; =========================
 ; REPORTERS
 ; =========================
-
-to-report customer-spawn-prob
-  let p 0.08
-  if season = "peak" [ set p p + 0.06 ]
-  if member? time-of-day ["morning" "evening"] [ set p p + 0.04 ]
-  if time-of-day = "night" [ set p p - 0.03 ]
-  report max list 0 (min list 0.5 p)
-end
 
 to-report calculate-arrival-interval
   let interval base-arrival-interval
@@ -873,18 +812,25 @@ to-report pax-board-rate
 end
 
 to-report fueling-time
-  report max list 5 (round (12 + random-normal 0 3))
+  report 5  ; Fixed 5 ticks
 end
 
 to-report fuelpad-of [g]
   report patch ([pxcor] of g) (([pycor] of g) - 2)
 end
 
-to-report has-boarding-plane?   ;; PATCH context (use on a boarding patch)
-  let gate-patch patch (pxcor) (pycor + 1)   ;; green gate just behind this purple patch
+to-report has-boarding-plane?   ;; PATCH context
+  let gate-patch patch (pxcor) (pycor + 1)
   if gate-patch = nobody [ report false ]
   let plane-here [gate-occupied-by] of gate-patch
   report (plane-here != nobody) and ([current-state] of plane-here = "boarding")
+end
+
+to-report count-available-gates
+  report count gate-patches with [
+    gate-occupied-by = nobody and
+    gate-reserved-by = nobody
+  ]
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -1047,6 +993,17 @@ season
 season
 "peak" "off-peak"
 1
+
+MONITOR
+141
+402
+234
+447
+Gate Available
+count-available-gates
+17
+1
+11
 
 @#$#@#$#@
 ## WHAT IS IT?
