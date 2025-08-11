@@ -289,7 +289,7 @@ end
 
 to setup-agents-mixed
   create-towers 1 [
-    setxy 50 30
+    setxy 50 40
     set color red
     set size 2
     set controlled-planes []
@@ -1620,7 +1620,7 @@ set-planes
 set-planes
 0
 100
-100.0
+6.0
 1
 1
 NIL
