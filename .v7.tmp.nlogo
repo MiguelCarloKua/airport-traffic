@@ -289,7 +289,7 @@ end
 
 to setup-agents-mixed
   create-towers 1 [
-    setxy 50 0
+    setxy 50 40
     set color red
     set size 2
     set controlled-planes []
@@ -538,12 +538,12 @@ to go
     if current-state = "flying" [
       let target closest-runway
       ifelse distance target < 1.5 [
-        ifelse patch-clear? target [
+        ifelse (patch-clear? target) and (member? target runway-patches) [
           move-to target
           set current-state "landed"
         ] [
-          set current-state "holding"
           set destination target
+          set current-state "holding"
         ]
       ] [
         face target
@@ -557,8 +557,7 @@ to go
       set holding-angle holding-angle + 2
       if holding-angle >= 360 [
         set holding-angle 0
-        ifelse patch-clear? destination [
-          move-to destination
+        ifelse (patch-clear? destination) and (member? destination runway-patches) [
           set current-state "landed"
         ] [
           set current-state "holding-half"
@@ -573,11 +572,10 @@ to go
       set holding-angle holding-angle + 2
       if holding-angle >= 180 [
         set holding-angle 0
-        ifelse patch-clear? destination [
-          move-to destination
-          set current-state "landed"
+        ifelse (patch-clear? destination) and (member? destination runway-patches) [
+          set current-state ""
         ] [
-          set current-state "holding"
+          set current-state "flying"
         ]
       ]
     ]
@@ -1620,7 +1618,7 @@ set-planes
 set-planes
 0
 100
-6.0
+100.0
 1
 1
 NIL
