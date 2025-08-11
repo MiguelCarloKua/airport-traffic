@@ -18,8 +18,9 @@ globals [
   flight-schedule next-arrival-time next-departure-time congestion-map
   weather-speed-multiplier base-arrival-interval base-departure-interval
 
+  base-passenger-prob base-passenger-batch terminal-capacity
   arrival-gate-patches
-  hangar-capacity hangar-slots terminal-capacity
+  hangar-capacity hangar-slots
   runway-capacity taxiway-capacity
 
   c-boarding c-fueling c-ready c-taxiing c-waiting c-emergency c-departing c-departed c-flying c-landed c-parked c-to-runway
@@ -38,7 +39,8 @@ planes-own [
   fuel-requested? fueling-remaining boarding-remaining
   deplaning-remaining
   pushback-remaining
-  holding-angle ; for turn progress
+  holding-angle
+  created-at
 ]
 
 towers-own [ controlled-planes runway-queue gate-assignments ]
@@ -350,19 +352,29 @@ to set-weather-effects
     set weather-speed-multiplier 0.5
   ]
 
+
   ask planes [
     set current-speed max list 0.01 (base-speed * weather-speed-multiplier)
   ]
 end
 
 to step-weather
-  ask raindrops [
-    set ycor ycor - vy
-    if ycor < min-pycor [ die ]
-  ]
   ask clouds [
-    set xcor xcor + drift
-    if xcor > max-pxcor + 5 [ set xcor (min-pxcor - 5) set ycor random-ycor ]
+    let step 0.7
+    ifelse can-move? step
+    [ fd step ]
+    [
+      set heading (heading + 180 + random 60 - 30)  ;; bounce back
+      ;; optional small in-bounds nudge
+      set xcor max list min-pxcor min list max-pxcor xcor
+      set ycor max list min-pxcor min list max-pycor ycor
+    ]
+  ]
+  ask raindrops [
+    let step 1.0
+    ifelse can-move? step [ fd step ] [
+      die  ;; drop despawns at edge
+    ]
   ]
 end
 
@@ -942,6 +954,57 @@ end
 ; REPORTERS
 ; =========================
 
+
+;; Convert ticks to a 24h clock if 1 tick = 1 minute (adjust if different)
+to-report sim-hour
+  report (ticks mod 1440) / 60
+end
+
+to-report tod-mult
+  let h sim-hour
+  report ifelse-value (h >= 6 and h < 9)  [1.4]
+         [ifelse-value (h >= 10 and h < 16) [1.0]
+         [ifelse-value (h >= 17 and h < 21) [1.3]
+                                              [0.6]]]
+end
+
+to-report weather-mult
+  report
+  ifelse-value weather-condition = "clear"      [1.0]
+  [ifelse-value weather-condition = "light-rain"[0.9]
+  [ifelse-value weather-condition = "rain"      [0.75]
+  [ifelse-value weather-condition = "heavy-rain"[0.6]
+  [ifelse-value weather-condition = "fog"       [0.6]
+  [ifelse-value weather-condition = "typhoon"   [0.2]
+  [ifelse-value weather-condition = "snow"      [0.5] [1.0]]]]]]]
+end
+
+
+to maybe-spawn-passengers
+  let cap terminal-capacity
+  let now count customers
+  if now >= cap [ stop ]  ;; or just 'report' if this is a reporter
+
+  let mult tod-mult * weather-mult
+  let prob clamp (base-passenger-prob * mult) 0 1
+  if random-float 1 < prob [
+    let batch min (list round (base-passenger-batch * mult) (cap - now))
+    if batch > 0 [
+      create-customers batch [
+        set color yellow
+        set shape "person"
+        set size 0.8
+        move-to one-of terminal-patches
+      ]
+    ]
+  ]
+end
+
+to-report clamp [v lo hi]
+  report max list lo min list hi v
+end
+
+
 to-report customer-spawn-prob
   let p 0.08
   if season = "peak" [ set p p + 0.06 ]
@@ -1044,6 +1107,13 @@ to-report can-enter-taxiways?
   report planes-on-taxiways < taxiway-capacity
 end
 
+
+;; Treat runway as free if no planes are sitting on runway patches
+to-report runway-free?
+  report not any? planes with [ member? patch-here runway-patches ]
+end
+
+
 ; =========================
 ; plots
 ; =========================
@@ -1089,6 +1159,48 @@ to update-plane-state-plot
 
   set-current-plot-pen "parked"
   plot count planes with [current-state = "parked"]
+end
+
+
+to update-flying
+  ask planes with [ current-state = "flying" ] [
+    ifelse runway-free? [
+      ;; pick an approach point on/near the runway
+      move-to one-of runway-patches
+      set current-state "landing"
+    ] [
+      ;; holding pattern
+      rt (random 20 - 10)
+      fd 1
+    ]
+  ]
+end
+
+;; After landing, taxi and only then check gates
+to update-landing
+  ask planes with [ current-state = "landing" ] [
+    ;; simple touchdown timeout or roll-out distance
+    if ticks - [created-at] of self > 2 [
+      set current-state "taxi-to-gate"
+    ]
+  ]
+end
+
+to update-taxi-to-gate
+  let free-gates gate-patches with [ not any? planes-here ]
+  ask planes with [ current-state = "taxi-to-gate" ] [
+    ifelse any? free-gates [
+      face min-one-of free-gates [ distance myself ]
+      fd 0.8
+      if member? patch-here free-gates [
+        set current-state "gate-ops"  ;; fueling → boarding
+      ]
+    ] [
+      ;; no gate yet, hold on a taxiway patch (but you already landed)
+      rt (random 40 - 20)
+      fd 0.5
+    ]
+  ]
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -1216,7 +1328,7 @@ set-planes
 set-planes
 0
 100
-1.0
+7.0
 1
 1
 NIL
@@ -1230,7 +1342,7 @@ CHOOSER
 time-of-day
 time-of-day
 "morning" "midday" "evening" "midnight"
-0
+3
 
 CHOOSER
 166
@@ -1240,7 +1352,7 @@ CHOOSER
 weather-condition
 weather-condition
 "fog" "clear" "rain" "snow"
-1
+2
 
 CHOOSER
 166
@@ -1470,7 +1582,7 @@ SWITCH
 608
 continuous-spawn?
 continuous-spawn?
-0
+1
 1
 -1000
 
@@ -1542,7 +1654,7 @@ passenger-modify-cap
 passenger-modify-cap
 0
 10000
-300.0
+700.0
 100
 1
 NIL
