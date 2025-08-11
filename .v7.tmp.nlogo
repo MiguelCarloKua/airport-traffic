@@ -558,7 +558,7 @@ to go
       if holding-angle >= 360 [
         set holding-angle 0
         ifelse (patch-clear? destination) and (member? destination runway-patches) [
-          set current-state "landed"
+          set current-state "flying"
         ] [
           set current-state "holding-half"
           set holding-angle 0
@@ -572,9 +572,7 @@ to go
       set holding-angle holding-angle + 2
       if holding-angle >= 180 [
         set holding-angle 0
-        ifelse (patch-clear? destination) and (member? destination runway-patches) [
-          set current-state ""
-        ] [
+        if (patch-clear? destination) and (member? destination runway-patches) [
           set current-state "flying"
         ]
       ]
@@ -814,8 +812,8 @@ to dispatch-fuelers
   let waiting-planes planes with [
     current-state = "await-fueler" and
     fuel-requested? and
-    not fueled? and
-    not fueler-assigned?
+    fueled? = false and
+    fueler-assigned? = false
   ]
 
   ask fuelers with [state = "idle"] [
@@ -1112,6 +1110,7 @@ to schedule-new-departure
       set boarded? false
       set fueled? false
       set fuel-requested? true
+
       set fueling-remaining 50
       set boarding-remaining 100
       color-by-state
@@ -1618,7 +1617,7 @@ set-planes
 set-planes
 0
 100
-100.0
+3.0
 1
 1
 NIL
@@ -1872,7 +1871,7 @@ SWITCH
 608
 continuous-spawn?
 continuous-spawn?
-1
+0
 1
 -1000
 

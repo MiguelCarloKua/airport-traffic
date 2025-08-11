@@ -812,8 +812,8 @@ to dispatch-fuelers
   let waiting-planes planes with [
     current-state = "await-fueler" and
     fuel-requested? and
-    not fueled? and
-    not fueler-assigned?
+    fueled? = false and
+    fueler-assigned? = false
   ]
 
   ask fuelers with [state = "idle"] [
@@ -1110,6 +1110,7 @@ to schedule-new-departure
       set boarded? false
       set fueled? false
       set fuel-requested? true
+      set fueler-assigned? false
       set fueling-remaining 50
       set boarding-remaining 100
       color-by-state
@@ -1616,7 +1617,7 @@ set-planes
 set-planes
 0
 100
-100.0
+3.0
 1
 1
 NIL
@@ -1870,7 +1871,7 @@ SWITCH
 608
 continuous-spawn?
 continuous-spawn?
-1
+0
 1
 -1000
 
