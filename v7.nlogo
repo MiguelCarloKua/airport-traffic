@@ -30,6 +30,16 @@ globals [
   fueler-home-patches
 
   hangar-parking-patches
+
+  ;; utilization accumulators
+  runway-used-ticks gate-occupied-ticks
+  ;; wait-time accumulators
+  sum-runway-wait n-runway-wait
+  sum-gate-wait    n-gate-wait
+  ;; rolling throughput window
+  flights-handled-interval passenger-throughput-interval last-interval-tick
+  ;; peaks
+  peak-terminal-occupancy
 ]
 planes-own [
   plane-type current-state destination flight-path current-path-index
@@ -47,6 +57,10 @@ planes-own [
   fueler-assigned?
   wait-counter-gate  ;; new variable to track how long the plane is stuck while taxiing
   parking-remaining  ;; new variable to track how long the plane is parked in a hangar
+
+  runway-wait-start?   runway-wait-start
+  gate-wait-start?     gate-wait-start
+  scheduled-dep-tick   ;; set when you schedule the flight (for on-time calc if you track it)
 ]
 
 towers-own [ controlled-planes runway-queue gate-assignments ]
@@ -116,6 +130,15 @@ to setup
   [ set passenger-cap min-passenger-cap-planes ]
   ;; Otherwise, it uses the value you set, but ensures it doesn't exceed the terminal capacity.
   [ set passenger-cap passenger-modify-cap ]
+
+  set last-interval-tick 0
+  set runway-used-ticks 0
+  set gate-occupied-ticks 0
+  ;; wait-time accumulators
+  set sum-runway-wait 0
+  set n-runway-wait 0
+  set sum-gate-wait 0
+  set n-gate-wait 0
 end
 
 to setup-shapes
@@ -426,6 +449,8 @@ to go
   set-weather-effects
   step-weather
 
+  update-accumulators
+
   ifelse continuous-spawn? [
     if ticks >= next-arrival-time   [ schedule-new-arrival ]
     if ticks >= next-departure-time [ schedule-new-departure ]
@@ -558,6 +583,7 @@ to go
 
     ;; ---------- LANDED ----------
     if current-state = "landed" [
+      start-gate-wait
       ;; Only proceed if a gate is actually available
       let available-gate free-arrival-gate
 
@@ -628,6 +654,7 @@ to go
 
       ;; reached a gate
       if [gate?] of patch-here and patch-here = gate-assigned [
+        end-gate-wait
         if (phase = "arrival") and (passengers > 0) [
           ask patch-here [ set gate-occupied-by myself set gate-reserved-by nobody ]
           set current-state "deplaning"
@@ -752,6 +779,7 @@ to go
 
     ;; ---------- TAXI-OUT ----------
     if current-state = "to-runway" [
+      start-runway-wait
       ifelse member? patch-here runway-patches [
         set current-state "departed"
         set color gray
@@ -762,6 +790,7 @@ to go
 
     ;; ---------- DEPARTED ----------
     if current-state = "departed" [
+      end-runway-wait
       fd-safe 1
       if xcor <= min-pxcor or xcor >= max-pxcor or ycor <= min-pycor or ycor >= max-pycor [
         ifelse continuous-spawn? [ die ] [ respawn-plane ]
@@ -1095,6 +1124,70 @@ to schedule-new-departure
   set next-departure-time ticks + calculate-departure-interval
 end
 
+;; when a plane STARTS waiting for a gate (after landing)
+to start-gate-wait
+  set gate-wait-start? true
+  set gate-wait-start ticks
+end
+
+;; when a plane gets a gate
+to end-gate-wait
+  if gate-wait-start? [
+    set sum-gate-wait sum-gate-wait + (ticks - gate-wait-start)
+    set n-gate-wait n-gate-wait + 1
+    set gate-wait-start? false
+  ]
+end
+
+;; when a plane ENTERS the runway queue (pushback complete, taxi to threshold)
+to start-runway-wait
+  set runway-wait-start? true
+  set runway-wait-start ticks
+end
+
+;; when a plane LIFTS OFF
+to end-runway-wait
+  if runway-wait-start? [
+    set sum-runway-wait sum-runway-wait + (ticks - runway-wait-start)
+    set n-runway-wait n-runway-wait + 1
+    set runway-wait-start? false
+  ]
+  set flights-handled-interval flights-handled-interval + 1
+  ;; if you count boarded pax, also bump passenger-throughput-interval here
+end
+
+to update-accumulators
+  ;; utilization
+  if any? planes with [ member? patch-here runway-patches ] [
+    set runway-used-ticks runway-used-ticks + 1
+  ]
+  if any? gate-patches with [ any? planes-here ] [
+    set gate-occupied-ticks gate-occupied-ticks + 1
+  ]
+
+  ;; peak terminal population (uses your terminal patch-set)
+  let term-pop count customers with [ member? patch-here terminal-patches ]
+  if term-pop > peak-terminal-occupancy [ set peak-terminal-occupancy term-pop ]
+
+  ;; roll plots every 300 ticks for bar/step charts
+  if ticks - last-interval-tick >= 300 [
+    plot-interval-charts
+    set flights-handled-interval 0
+    set passenger-throughput-interval 0
+    set last-interval-tick ticks
+  ]
+end
+
+to plot-interval-charts
+  set-current-plot "Flights and Pax per 300 ticks"
+  set-current-plot-pen "flights"
+  plot flights-handled-interval
+  set-current-plot-pen "passengers"
+  plot passenger-throughput-interval
+end
+
+
+
 ; =========================
 ; REPORTERS
 ; =========================
@@ -1269,6 +1362,25 @@ to-report hangar-occupancy-and-capacity
   report (word occupied-slots " / " total-slots)
 end
 
+to-report avg-runway-wait
+  report ifelse-value (n-runway-wait = 0) [0] [sum-runway-wait / n-runway-wait]
+end
+
+to-report avg-gate-wait
+  report ifelse-value (n-gate-wait = 0) [0] [sum-gate-wait / n-gate-wait]
+end
+
+to-report runway-utilization-pct
+  report ifelse-value (ticks = 0) [0] [100 * runway-used-ticks / ticks]
+end
+
+to-report gate-occupancy-pct
+  report ifelse-value (ticks = 0) [0] [100 * gate-occupied-ticks / ticks]
+end
+
+to-report terminal-pop
+  report count customers with [ member? patch-here terminal-patches ]
+end
 
 
 ; =========================
@@ -1507,7 +1619,7 @@ set-planes
 set-planes
 0
 100
-8.0
+100.0
 1
 1
 NIL
@@ -1531,7 +1643,7 @@ CHOOSER
 weather-condition
 weather-condition
 "fog" "clear" "rain" "snow"
-1
+0
 
 CHOOSER
 166
@@ -1949,6 +2061,100 @@ hangar-occupancy-and-capacity
 17
 1
 11
+
+PLOT
+1527
+20
+1856
+147
+Terminal Passengers
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" "set-current-plot \"Terminal Passengers\"\nset-current-plot-pen \"terminal\"\nplot terminal-pop"
+PENS
+"terminal" 1.0 0 -16777216 true "" ""
+
+PLOT
+1526
+156
+1860
+281
+Average Wait Time (Runway & Gate)
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" "set-current-plot \"Average Wait Time (Runway & Gate)\"\nset-current-plot-pen \"runway-wait\"\nplot avg-runway-wait\nset-current-plot-pen \"gate-wait\"\nplot avg-gate-wait\n"
+PENS
+"runway-wait" 1.0 0 -16777216 true "" ""
+"gate-wait" 1.0 0 -7500403 true "" ""
+
+PLOT
+1525
+285
+1861
+413
+Runway & Gate Utilization (%)
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" "set-current-plot \"Runway & Gate Utilization (%)\"\nset-current-plot-pen \"runway%\"\nplot runway-utilization-pct\nset-current-plot-pen \"gate%\"\nplot gate-occupancy-pct\n"
+PENS
+"runway%" 1.0 0 -16777216 true "" ""
+"gate%" 1.0 0 -7500403 true "" ""
+
+PLOT
+1526
+418
+1861
+546
+Flights and Pax per 300 ticks
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" "\n  set-current-plot \"Flights and Pax per 300 ticks\"\n  set-current-plot-pen \"flights\"\n  plot flights-handled-interval\n  set-current-plot-pen \"passengers\"\n  plot passenger-throughput-interval\n"
+PENS
+"flights" 1.0 1 -7500403 true "" ""
+"passengers" 1.0 1 -2674135 true "" ""
+
+PLOT
+1525
+554
+1725
+704
+Delays vs Cancellations
+NIL
+NIL
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" "set-current-plot \"Delays vs Cancellations\"\nset-current-plot-pen \"delayed\"\nplot flights-delayed\nset-current-plot-pen \"cancelled\"\nplot flights-cancelled\n"
+PENS
+"delayed" 1.0 1 -7500403 true "" ""
+"cancelled" 1.0 1 -2674135 true "" ""
 
 @#$#@#$#@
 ## WHAT IS IT?
