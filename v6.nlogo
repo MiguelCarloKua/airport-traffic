@@ -19,9 +19,12 @@ globals [
   weather-speed-multiplier base-arrival-interval base-departure-interval
 
   arrival-gate-patches
-  hangar-capacity hangar-slots
+  hangar-capacity hangar-slots terminal-capacity
+  runway-capacity taxiway-capacity
 
   c-boarding c-fueling c-ready c-taxiing c-waiting c-emergency c-departing c-departed c-flying c-landed c-parked c-to-runway
+
+  total-passengers passengers-onboard passengers-walking passenger-cap
 ]
 
 planes-own [
@@ -32,15 +35,16 @@ planes-own [
   wait-counter last-patch
   boarded? fueled?
   phase
+  fuel-requested? fueling-remaining boarding-remaining
   deplaning-remaining
-  fueling-remaining
   pushback-remaining
+  holding-angle ; for turn progress
 ]
 
 towers-own [ controlled-planes runway-queue gate-assignments ]
 trucks-own [ truck-type assigned-plane home-base service-time busy ]
 customers-own [ destination-gate purpose]
-fuelers-own   [ assigned-gate service-remaining ]
+fuelers-own   [ state assigned-plane home-patch ]
 clouds-own    [ drift ]
 raindrops-own [ vy ]
 
@@ -53,7 +57,7 @@ patches-own [ gate? gate-reserved-by gate-occupied-by lock-ticks boarding-lane? 
 to setup
   clear-all
   reset-ticks
-  set weather-condition "clear"
+  set weather-condition weather-condition
   set season season
   set time-of-day time-of-day
   set total-flights-handled 0
@@ -68,19 +72,27 @@ to setup
   set flight-schedule table:make
   set congestion-map table:make
   set weather-speed-multiplier 1.0
-  set base-arrival-interval 20
-  set base-departure-interval 25
+  set base-arrival-interval arrival-interval
+  set base-departure-interval departure-interval
+  set runway-capacity 1
+  if not is-number? taxiway-capacity [set taxiway-capacity 20]
 
   setup-colors
   setup-airport-layout
 
-  set hangar-capacity 20
+  set hangar-capacity 25
   set hangar-slots n-of hangar-capacity hangar-patches
+
+  ;; terminal pool target
+  set terminal-capacity 200
 
   setup-shapes
   setup-agents-mixed
+  setup-fuelers         ;; <— fuel trucks are created here
   schedule-initial-flights
   set-weather-effects
+
+  set passenger-cap passenger-modify-cap
 end
 
 to setup-shapes
@@ -96,10 +108,25 @@ to setup-colors
   set c-departed   rgb 96 96 96
   set c-flying     rgb 0 230 180
   set c-landed     rgb 255 255 0
-  set c-parked     rgb 255 255 255   ; white
+  set c-parked     rgb 255 255 255
   set c-to-runway  rgb 0 200 0
   set c-boarding   rgb 255 170 220
   set c-fueling    rgb 255 160 60
+end
+
+to setup-fuelers
+  ;; stage fuelers at a base (prefer fueling-patches, else hangar area)
+  let fueler-home-spot one-of fueling-patches
+  if fueler-home-spot = nobody [ set fueler-home-spot one-of hangar-patches ]
+  create-fuelers 3 [
+    move-to fueler-home-spot
+    set home-patch fueler-home-spot
+    set shape "truck"
+    set color orange
+    set size 1.2
+    set state "idle"
+    set assigned-plane nobody
+  ]
 end
 
 ; =========================
@@ -176,7 +203,7 @@ to setup-airport-layout
   ask terminal-patches [ set pcolor black ]
 
   set boarding-patches no-patches
-  set fueling-patches no-patches
+  set fueling-patches  no-patches
   foreach sort gate-patches [
     g ->
     let gx [pxcor] of g
@@ -184,9 +211,9 @@ to setup-airport-layout
     let b patch gx (gy - 1)
     let f patch gx (gy - 2)
     ask b [ set pcolor violet set boarding-lane? true ]
-    ask f [ set pcolor 45 set fueling-lane? true ]
+    ask f [ set pcolor 45 set fueling-lane? true ] ;; visual reference
     set boarding-patches (patch-set boarding-patches b)
-    set fueling-patches (patch-set fueling-patches f)
+    set fueling-patches  (patch-set fueling-patches  f)
   ]
 
   set arrival-gate-patches gate-patches
@@ -208,17 +235,18 @@ to setup-agents-mixed
     set label "ATC"
   ]
 
-  let n max list 0 set-planes
+  let n set-planes
   let n-flying   round (n * 0.34)
-  let n-taxiing  round (n * 0.66)  ; Combine remaining planes into taxiing
+  let n-waiting  round (n * 0.33)
+  let n-taxiing  n - n-flying - n-waiting
 
-  ;; Arrivals start flying
+  ;; Arrivals start in the air with 50 pax to deplane; no pre-assigned gate
   repeat n-flying [
     create-planes 1 [
-      setxy random-xcor (max-pycor + 5)
+      setxy random-xcor (min-pycor)
       set shape "airplane" set size 1.5
       set plane-type "arriving" set current-state "flying"
-      set base-speed 0.5 set current-speed base-speed
+      set base-speed plane-speed set current-speed base-speed
       set last-patch patch-here
       set passengers 50
       set phase "arrival"
@@ -226,11 +254,39 @@ to setup-agents-mixed
       set fueled? false
       set gate-assigned nobody
       set destination nobody
+      set fuel-requested? false
+      set fueling-remaining 0
+      set boarding-remaining 0
       color-by-state
     ]
   ]
 
-  ;; Already taxiing departures
+  ;; Departures at gates: request a fueler first
+  let free-gates gate-patches with [ gate-occupied-by = nobody and gate-reserved-by = nobody ]
+  repeat n-waiting [
+    if any? free-gates [
+      let g one-of free-gates
+      set free-gates other free-gates with [ self != g ]
+      create-planes 1 [
+        move-to g
+        ask g [ set gate-occupied-by myself ]
+        set shape "airplane" set size 1.5
+        set plane-type "departing" set current-state "await-fueler"
+        set base-speed 0.5 set current-speed base-speed
+        set gate-assigned g set destination g
+        set passengers 0
+        set phase "turnaround"
+        set boarded? false
+        set fueled? false
+        set fuel-requested? true
+        set fueling-remaining 50
+        set boarding-remaining 100
+        color-by-state
+      ]
+    ]
+  ]
+
+  ;; Some already taxiing to runway (after boarding)
   repeat n-taxiing [
     let t one-of taxiway-patches
     create-planes 1 [
@@ -244,6 +300,9 @@ to setup-agents-mixed
       set phase "turnaround"
       set boarded? true
       set fueled? true
+      set fuel-requested? false
+      set fueling-remaining 0
+      set boarding-remaining 0
       color-by-state
     ]
   ]
@@ -310,46 +369,62 @@ end
 ; =========================
 ; MAIN LOOP
 ; =========================
-
 to go
+  ;; --- global updates ---
   set-weather-effects
   step-weather
 
-  if ticks >= next-arrival-time   [ schedule-new-arrival ]
-  if ticks >= next-departure-time [ schedule-new-departure ]
+  ifelse continuous-spawn? [
+    if ticks >= next-arrival-time   [ schedule-new-arrival ]
+    if ticks >= next-departure-time [ schedule-new-departure ]
+  ] [
+    if count planes <= set-planes [
+      if ticks >= next-arrival-time   [ schedule-new-arrival ]
+      if ticks >= next-departure-time [ schedule-new-departure ]
+    ]
+  ]
+
+  dispatch-fuelers
+  step-fuelers
+
   manage-traffic
 
   ask patches with [ lock-ticks > 0 ] [ set lock-ticks lock-ticks - 1 ]
 
-  spawn-terminal-passengers
+  ;; keep terminal stocked up to 200 boarding passengers (no more)
+  ensure-terminal-stock
 
-  let passenger-speed 0.45
+  ;; =========================
+  ;; CUSTOMERS (PASSENGERS)
+  ;; =========================
+  let passenger-speed passenger-modify-speed
+  let active-pads (boarding-patches with [ has-boarding-plane? ])
   ask customers [
     if shape != "arrow" [ set shape "arrow" ]
     if size < 1.2 [ set size 1.2 ]
     if color = black [ ifelse purpose = "arrive" [ set color blue ] [ set color yellow ] ]
 
+    ;; -------- destination selection / retarget every tick --------
     if purpose = "board" [
-      let active-pads (boarding-patches with [ has-boarding-plane? ])
       ifelse any? active-pads [
         let nearest min-one-of active-pads [ distance myself ]
         set destination-gate nearest
       ] [
-        if (destination-gate = nobody) or not member? destination-gate terminal-patches [
-          set destination-gate one-of terminal-patches
-        ]
+        set destination-gate one-of terminal-patches
       ]
     ]
     if purpose = "arrive" [
       if destination-gate = nobody [ set destination-gate one-of terminal-patches ]
     ]
 
+    ;; -------- movement --------
     if destination-gate != nobody [
       face destination-gate
       ifelse distance destination-gate > 0.5 [
         fd passenger-speed
       ] [
-        if (purpose = "board") and member? destination-gate boarding-patches [
+        ;; Boarding at purple patch
+        if (purpose = "board") and [boarding-lane?] of destination-gate [
           if [has-boarding-plane?] of destination-gate [
             let gate-patch patch ([pxcor] of destination-gate) (([pycor] of destination-gate) + 1)
             let plane-here [gate-occupied-by] of gate-patch
@@ -359,7 +434,11 @@ to go
             ]
           ]
         ]
-        if (purpose = "arrive") and member? destination-gate terminal-patches [ die ]
+
+        ;; Arrivals reaching terminal → despawn
+        if (purpose = "arrive") and ([pcolor] of destination-gate = black) [
+          die
+        ]
       ]
     ]
   ]
@@ -371,20 +450,49 @@ to go
 
     ;; ---------- FLYING ----------
     if current-state = "flying" [
-      ifelse can-land? [
-        let target closest-runway
-        ifelse distance target < 1 [
-          if patch-clear? target [
-            move-to target
-            set current-state "landed"
-          ]
+      let target closest-runway
+      ifelse distance target < 1.5 [
+        ifelse patch-clear? target [
+          move-to target
+          set current-state "landed"
         ] [
-          face target
-          fd current-speed
+          set current-state "holding"
+          set destination target
         ]
       ] [
-        rt 2
+        face target
         fd current-speed
+      ]
+    ]
+
+    if current-state = "holding" [
+      rt 2
+      fd current-speed
+      set holding-angle holding-angle + 2
+      if holding-angle >= 360 [
+        set holding-angle 0
+        ifelse patch-clear? destination [
+          move-to destination
+          set current-state "landed"
+        ] [
+          set current-state "holding-half"
+          set holding-angle 0
+        ]
+      ]
+    ]
+
+    if current-state = "holding-half" [
+      rt 2
+      fd current-speed
+      set holding-angle holding-angle + 2
+      if holding-angle >= 180 [
+        set holding-angle 0
+        ifelse patch-clear? destination [
+          move-to destination
+          set current-state "landed"
+        ] [
+          set current-state "holding"
+        ]
       ]
     ]
 
@@ -395,50 +503,56 @@ to go
       ifelse g != nobody [
         set gate-assigned g
         ask g [ set gate-reserved-by myself ]
-        set destination g
-        set current-state "taxiing"
       ] [
-        let slot one-of hangar-patches with [ not any? turtles-here ]
+        let slot one-of gate-patches with [ not any? turtles-here ]
         ifelse slot != nobody [
           set gate-assigned slot
-          set destination slot
-          set current-state "taxiing"
         ] [
-          set current-state "flying"
-          stop
+          let fallback one-of gate-patches
+          if fallback != nobody [
+            set gate-assigned fallback
+            ask fallback [ set gate-reserved-by myself ]
+          ]
         ]
       ]
+      set current-state "taxiing"
+    ]
+
+    ;; ---------- WAITING (legacy) ----------
+    if current-state = "waiting" [
+      set phase "turnaround"
+      if gate-assigned != nobody [
+        ;; new flow: request fueler at gate instead of taxiing to fuel pad
+        set fuel-requested? true
+        set fueling-remaining 50
+        set boarding-remaining 100
+        set current-state "await-fueler"
+      ]
+    ]
+
+    ;; ---------- AWAIT-FUELER ----------
+    if current-state = "await-fueler" [
+      ;; fueler will flip us to "fueling"
     ]
 
     ;; ---------- TAXIING ----------
     if current-state = "taxiing" [
-      ;; Reached gate
-      if member? patch-here gate-patches and patch-here = gate-assigned [
+      ;; reached a gate
+      if [gate?] of patch-here and patch-here = gate-assigned [
         if (phase = "arrival") and (passengers > 0) [
           ask patch-here [ set gate-occupied-by myself set gate-reserved-by nobody ]
           set current-state "deplaning"
         ]
         if (phase = "turnaround") and (passengers = 0) [
           ask patch-here [ set gate-occupied-by myself set gate-reserved-by nobody ]
-          set current-state "boarding"
+          ;; request fueler at gate
+          set fuel-requested? true
+          set fueling-remaining 50
+          set boarding-remaining 100
+          set current-state "await-fueler"
         ]
       ]
-
-      ;; ✅ Reached hangar → become parked
-      if member? patch-here hangar-patches and patch-here = destination [
-        set current-state "parked"
-      ]
-
-      ;; Reached fuel pad
-      if destination != nobody and patch-here = destination and member? patch-here fueling-patches [
-        if [fuelpad-occupied-by] of patch-here = nobody or [fuelpad-occupied-by] of patch-here = self [
-          ask patch-here [ set fuelpad-occupied-by myself ]
-          set fueling-remaining fueling-time
-          set current-state "fueling"
-        ]
-      ]
-
-      ;; Keep moving
+      ;; otherwise keep moving
       if current-state = "taxiing" [ taxi-to-gate ]
     ]
 
@@ -446,43 +560,46 @@ to go
     if current-state = "deplaning" [
       let n min list passengers pax-offload-rate
       if n > 0 [
-        ask patch-here [
-          sprout n [
-            set breed customers
-            set shape "arrow"
-            set size 1.2
-            set color blue
-            set purpose "arrive"
-            set destination-gate one-of terminal-patches
+        let allowed (passenger-cap - total-passengers)
+        if allowed > 0 [
+          ask patch-here [
+            sprout n [
+              set breed customers
+              set shape "arrow"
+              set size 1.2
+              set color blue
+              set purpose "arrive"
+              set destination-gate one-of terminal-patches
+            ]
           ]
         ]
         set passengers passengers - n
       ]
       if passengers <= 0 [
-        ask gate-assigned [ if gate-occupied-by = myself [ set gate-occupied-by nobody ] ]
+        ;; stay at gate, start turnaround
+        ask gate-assigned [ if gate-occupied-by = myself [ set gate-occupied-by myself ] ] ;; keep occupying for service
         set phase "turnaround"
-        let gx [pxcor] of gate-assigned
-        let gy [pycor] of gate-assigned
-        set destination patch gx (gy - 2)
-        set current-state "taxiing"
+        set fuel-requested? true
+        set fueling-remaining 50
+        set boarding-remaining 100
+        set current-state "await-fueler"
       ]
     ]
 
     ;; ---------- FUELING ----------
     if current-state = "fueling" [
-      set fueling-remaining fueling-remaining - 1
+      ;; countdown handled by the fueler; keep safety guard
       if fueling-remaining <= 0 [
-        ask patch-here [ if fuelpad-occupied-by = myself [ set fuelpad-occupied-by nobody ] ]
-        let gate-patch gate-assigned
-        let boarding-lane patch ([pxcor] of gate-patch) (([pycor] of gate-patch) - 1)
-        set destination boarding-lane
+        set fueled? true
         set current-state "boarding"
       ]
     ]
 
     ;; ---------- BOARDING ----------
     if current-state = "boarding" [
-      if passengers >= 50 [
+      if boarding-remaining <= 0 [ set boarding-remaining 100 ]
+      set boarding-remaining boarding-remaining - 1
+      if (passengers >= 50) and (boarding-remaining <= 0) [
         set pushback-remaining 3
         set current-state "pushback"
       ]
@@ -511,62 +628,111 @@ to go
     if current-state = "departed" [
       fd-safe 1
       if xcor <= min-pxcor or xcor >= max-pxcor or ycor <= min-pycor or ycor >= max-pycor [
-        respawn-plane
+        ifelse continuous-spawn? [ die ] [ respawn-plane ]
       ]
     ]
 
-    ;; ---------- PARKED ----------
-    if current-state = "parked" [
-      if member? patch-here hangar-patches [
-        if any? gate-patches with [ gate-reserved-by = nobody and gate-occupied-by = nobody ] [
-          let g one-of gate-patches with [ gate-reserved-by = nobody and gate-occupied-by = nobody ]
-          set gate-assigned g
-          ask g [ set gate-reserved-by myself ]
-          set destination g
-          set current-state "waiting"
-        ]
-      ]
-    ]
-
-    ;; ✅ color-by-state MUST be at the END
     color-by-state
   ]
-
+  update-plane-state-plot
+  set total-passengers (sum [passengers] of planes) + (count customers)
+  set passengers-onboard (sum [passengers] of planes)
+  set passengers-walking (count customers)
   tick
 end
 
 ; =========================
-; PASSENGER SPAWN
+; FUELERS (dispatch + behavior)
 ; =========================
 
-to spawn-terminal-passengers
-  let needy planes with [
-    current-state = "boarding" and
-    gate-assigned != nobody and
-    passengers < 50
+to dispatch-fuelers
+  let waiting-planes planes with [
+    current-state = "await-fueler" and fuel-requested? and (not fueled?)
   ]
-  foreach sort needy [
-    p ->
-    let g [gate-assigned] of p
-    let b patch ([pxcor] of g) (([pycor] of g) - 1)
-    if not [has-boarding-plane?] of b [ stop ]
-    let need 50 - [passengers] of p
-    let n min list need (1 + random (pax-board-rate * 2))
-    if n > 0 [
-      create-customers n [
-        move-to one-of terminal-patches
-        set shape "arrow"
-        set size 1.2
-        set color yellow
-        set purpose "board"
-        set destination-gate b
+  ask fuelers with [ state = "idle" ] [
+    if any? waiting-planes [
+      let p min-one-of waiting-planes [ distance myself ]
+      set assigned-plane p
+      set state "to-plane"
+    ]
+  ]
+end
+
+to step-fuelers
+  ask fuelers [
+    if state = "to-plane" [
+      if (assigned-plane = nobody) or (not is-turtle? assigned-plane) [
+        set assigned-plane nobody
+        set state "returning"
+        stop
+      ]
+      face assigned-plane
+      fd 0.8
+      if distance assigned-plane < 1.2 [
+        set state "fueling"
+        ask assigned-plane [
+          set current-state "fueling"
+          if fueling-remaining <= 0 [ set fueling-remaining 50 ]
+        ]
+      ]
+    ]
+
+    if state = "fueling" [
+      ifelse (assigned-plane != nobody) and is-turtle? assigned-plane and [current-state] of assigned-plane = "fueling" [
+        ask assigned-plane [
+          set fueling-remaining fueling-remaining - 1
+          if fueling-remaining <= 0 [
+            set fueled? true
+            set fuel-requested? false
+            set current-state "boarding"
+            if boarding-remaining <= 0 [ set boarding-remaining 100 ]
+          ]
+        ]
+        if (assigned-plane = nobody) or [fueled?] of assigned-plane [
+          set state "returning"
+          set assigned-plane nobody
+        ]
+      ] [
+        set state "returning"
+        set assigned-plane nobody
+      ]
+    ]
+
+    if state = "returning" [
+      face home-patch
+      fd 0.8
+      if distance home-patch < 0.5 [
+        set state "idle"
       ]
     ]
   ]
 end
 
 ; =========================
-; TRAFFIC HELPERS
+; PASSENGER SPAWN (terminal -> boarding)
+; =========================
+
+to ensure-terminal-stock
+  let terminal-boarders count customers with [
+    purpose = "board" and [pcolor] of patch-here = black
+  ]
+  let deficit terminal-capacity - terminal-boarders
+  let allowed (passenger-cap - total-passengers)
+  if deficit > 0 and allowed > 0 [
+    let n min list deficit passenger-spawn-rate
+    create-customers n [
+      move-to one-of terminal-patches
+      set shape "arrow"
+      set size 1.2
+      set color yellow
+      set purpose "board"
+      set destination-gate one-of terminal-patches
+    ]
+  ]
+end
+
+; =========================
+; TRAFFIC / MOVEMENT HELPERS
 ; =========================
 
 to manage-traffic
@@ -579,10 +745,24 @@ to manage-traffic
       ask g [ set gate-reserved-by myself ]
     ]
   ]
+
+  let unassigned-departures planes with [ plane-type = "departing" and current-state = "ready" and gate-assigned = nobody ]
+  ask unassigned-departures [
+    let g one-of gate-patches with [ gate-reserved-by = nobody and gate-occupied-by = nobody ]
+    if g != nobody [
+      set gate-assigned g
+      set destination g
+      ask g [ set gate-reserved-by myself ]
+    ]
+  ]
 end
 
 to taxi-to-runway
-  let options neighbors4 with [ member? self navigable-patches and lock-ticks = 0 and not any? turtles-here ]
+  let options neighbors4 with [
+    member? self taxiway-patches and ; Prioritize taxiways
+    lock-ticks = 0 and
+    not any? turtles-here
+  ]
   let cand options
   if last-patch != nobody [
     set cand cand with [ self != [last-patch] of myself ]
@@ -594,45 +774,80 @@ to taxi-to-runway
     let next-patch min-one-of cand [
       (distance target-runway) + 0.001 * abs subtract-headings myhd ((towards myself + 180) mod 360)
     ]
-    let prev patch-here
-    face next-patch
-    move-to next-patch
-    set last-patch prev
-    ask patch-here [ set lock-ticks 2 ]
+    ;; Check if the next patch is a runway
+    ifelse member? next-patch runway-patches [
+      if can-enter-runway? [
+        let prev patch-here
+        face next-patch
+        move-to next-patch
+        set last-patch prev
+        ask patch-here [ set lock-ticks 2 ]
+      ]
+    ] [
+      ;; Otherwise, continue on taxiways
+      let prev patch-here
+      face next-patch
+      move-to next-patch
+      set last-patch prev
+      ask patch-here [ set lock-ticks 2 ]
+    ]
   ]
 end
 
 to taxi-to-gate
-  let options neighbors4 with [ member? self navigable-patches and lock-ticks = 0 and not any? turtles-here ]
+  let options neighbors4 with [
+    member? self navigable-patches and
+    lock-ticks = 0 and
+    not any? turtles-here and
+    (not gate? or self = [gate-assigned] of myself)
+  ]
   let cand options
   if last-patch != nobody [
     set cand cand with [ self != [last-patch] of myself ]
     if not any? cand [ set cand options ]
   ]
   if any? cand [
-    let tgt destination
-    let myhd heading
-    let next-patch min-one-of cand [
-      distance tgt + 0.001 * abs subtract-headings myhd ((towards myself + 180) mod 360)
+    let tgt gate-assigned
+    if tgt != nobody [
+      ;; only head to our own gate
+      set cand cand with [ not gate? or self = tgt ]
+
+      let myhd heading
+      let next-patch min-one-of cand [
+        (distance tgt) + 0.001 * abs subtract-headings myhd ((towards myself + 180) mod 360)
+      ]
+      ;; capacity gate when entering taxiways
+      if member? next-patch taxiway-patches [
+        if not can-enter-taxiways? [ stop ]
+      ]
+      let prev patch-here
+      face next-patch
+      move-to next-patch
+      set last-patch prev
+      ask patch-here [ set lock-ticks 2 ]
     ]
-    let prev patch-here
-    face next-patch
-    move-to next-patch
-    set last-patch prev
-    ask patch-here [ set lock-ticks 2 ]
   ]
 end
 
-to fd-safe [d]
-  let p patch-ahead d
-  if patch-clear? p [ fd d ]
+to free-my-gate
+  if gate-assigned != nobody [
+    ask gate-assigned [
+      if gate-occupied-by = myself [ set gate-occupied-by nobody ]
+      if gate-reserved-by = myself [ set gate-reserved-by nobody ]
+    ]
+  ]
 end
 
 to respawn-plane
-  setxy random-xcor (max-pycor + 5)
+  let edge random 4
+  if edge = 0 [ setxy random-xcor max-pycor ]
+  if edge = 1 [ setxy random-xcor min-pycor ]
+  if edge = 2 [ setxy min-pxcor random-ycor ]
+  if edge = 3 [ setxy max-pxcor random-ycor ]
+
   set last-patch patch-here
   set current-state "flying"
-  set color sky + 3
+  set color blue
   set shape "airplane"
   set plane-type "arriving"
   set base-speed 0.5
@@ -642,6 +857,9 @@ to respawn-plane
   set phase "arrival"
   set boarded? false
   set fueled? false
+  set fuel-requested? false
+  set fueling-remaining 0
+  set boarding-remaining 0
   color-by-state
 end
 
@@ -655,10 +873,13 @@ to color-by-state
     if plane-type = "arriving" [ set color sky + 3 ]
     if plane-type != "arriving" [ set color c-flying ]
   ]
+  if current-state = "holding" [ set color red ]
+  if current-state = "holding-half" [ set color yellow ]
   if current-state = "landed"    [ set color c-landed ]
   if current-state = "to-runway" [ set color c-to-runway ]
   if current-state = "deplaning" [ set color c-waiting ]
   if current-state = "fueling"   [ set color c-fueling ]
+  if current-state = "await-fueler" [ set color c-fueling ]
   if current-state = "boarding"  [ set color c-boarding ]
   if current-state = "pushback"  [ set color c-ready ]
   if current-state = "waiting" [
@@ -669,9 +890,14 @@ to color-by-state
   if current-state = "parked"    [ set color c-parked ]
 end
 
+to fd-safe [d]
+  let p patch-ahead d
+  if patch-clear? p [ fd d ]
+end
+
 to schedule-new-arrival
   create-planes 1 [
-    setxy random-xcor (max-pycor + 5)
+    setxy random-xcor (min-pycor)
     set last-patch patch-here
     set color white
     set shape "airplane"
@@ -685,6 +911,9 @@ to schedule-new-arrival
     set phase "arrival"
     set boarded? false
     set fueled? false
+    set fuel-requested? false
+    set fueling-remaining 0
+    set boarding-remaining 0
     set gate-assigned nobody
     set destination nobody
     color-by-state
@@ -695,11 +924,49 @@ to schedule-new-arrival
   set next-arrival-time ticks + calculate-arrival-interval
 end
 
+to schedule-new-departure
+  let g reserve-free-gate 60
+  if g != nobody [
+    create-planes 1 [
+      move-to g
+      ask g [ set gate-occupied-by myself ]
+      set last-patch patch-here
+      set color white
+      set shape "airplane"
+      set size 1.5
+      set plane-type "departing"
+      set current-state "await-fueler"
+      set base-speed 0.5
+      set flight-id word "DEP_" (random 10000)
+      set destination g
+      set gate-assigned g
+      set passengers 0
+      set phase "turnaround"
+      set boarded? false
+      set fueled? false
+      set fuel-requested? true
+      set fueling-remaining 50
+      set boarding-remaining 100
+      color-by-state
+    ]
+    set total-departures total-departures + 1
+    set total-flights-handled total-flights-handled + 1
+    set flights-this-hour flights-this-hour + 1
+  ]
+  set next-departure-time ticks + calculate-departure-interval
 end
 
 ; =========================
 ; REPORTERS
 ; =========================
+
+to-report customer-spawn-prob
+  let p 0.08
+  if season = "peak" [ set p p + 0.06 ]
+  if member? time-of-day ["morning" "evening"] [ set p p + 0.04 ]
+  if time-of-day = "night" [ set p p - 0.03 ]
+  report max list 0 (min list 0.5 p)
+end
 
 to-report calculate-arrival-interval
   let interval base-arrival-interval
@@ -738,7 +1005,7 @@ to-report free-arrival-gate
 end
 
 to-report hangar-has-space?
-  report (count turtles-on hangar-slots) < hangar-capacity
+  report (count planes with [ member? patch-here hangar-slots ]) < hangar-capacity
 end
 
 to-report pick-free-hangar-slot
@@ -764,7 +1031,7 @@ to-report pax-board-rate
 end
 
 to-report fueling-time
-  report 5  ; Fixed 5 ticks
+  report 50  ;; fixed duration now handled by fuelers too
 end
 
 to-report fuelpad-of [g]
@@ -778,18 +1045,74 @@ to-report has-boarding-plane?   ;; PATCH context
   report (plane-here != nobody) and ([current-state] of plane-here = "boarding")
 end
 
-to-report count-available-gates
-  report count gate-patches with [
-    gate-occupied-by = nobody and
-    gate-reserved-by = nobody
-  ]
+to-report planes-on-runway
+  report count planes with [ member? patch-here runway-patches ]
+end
+
+to-report planes-on-taxiways
+  report count planes with [ member? patch-here taxiway-patches ]
+end
+
+to-report can-enter-runway?
+  report planes-on-runway < runway-capacity
+end
+
+to-report can-enter-taxiways?
+  report planes-on-taxiways < taxiway-capacity
+end
+
+; =========================
+; plots
+; =========================
+
+to update-plane-state-plot
+  set-current-plot "Plane States"
+
+  set-current-plot-pen "flying"
+  plot count planes with [current-state = "flying"]
+
+  set-current-plot-pen "holding"
+  plot count planes with [current-state = "holding"]
+
+  set-current-plot-pen "holding-half"
+  plot count planes with [current-state = "holding-half"]
+
+  set-current-plot-pen "landed"
+  plot count planes with [current-state = "landed"]
+
+  set-current-plot-pen "taxiing"
+  plot count planes with [current-state = "taxiing"]
+
+  set-current-plot-pen "fueling"
+  plot count planes with [current-state = "fueling"]
+
+  set-current-plot-pen "boarding"
+  plot count planes with [current-state = "boarding"]
+
+  set-current-plot-pen "pushback"
+  plot count planes with [current-state = "pushback"]
+
+  set-current-plot-pen "waiting"
+  plot count planes with [current-state = "waiting"]
+
+  set-current-plot-pen "to-runway"
+  plot count planes with [current-state = "to-runway"]
+
+  set-current-plot-pen "departed"
+  plot count planes with [current-state = "departed"]
+
+  set-current-plot-pen "deplaning"
+  plot count planes with [current-state = "deplaning"]
+
+  set-current-plot-pen "parked"
+  plot count planes with [current-state = "parked"]
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
-640
-22
-1613
-757
+487
+19
+1460
+754
 -1
 -1
 9.5545
@@ -799,8 +1122,8 @@ GRAPHICS-WINDOW
 1
 1
 0
-1
-1
+0
+0
 1
 0
 100
@@ -813,10 +1136,10 @@ ticks
 30.0
 
 BUTTON
-337
-47
-507
-99
+313
+20
+483
+72
 setup
 setup
 NIL
@@ -830,10 +1153,10 @@ NIL
 1
 
 BUTTON
-339
-122
-511
-172
+313
+80
+485
+130
 go
 go
 T
@@ -847,10 +1170,10 @@ NIL
 1
 
 MONITOR
-345
-209
-403
-254
+314
+303
+372
+348
 Flying
 count planes with [current-state = \"flying\"]
 17
@@ -858,21 +1181,21 @@ count planes with [current-state = \"flying\"]
 11
 
 MONITOR
-347
-289
-405
-334
-Landed
+314
+252
+372
+297
+Taxiing
 count planes with [current-state = \"taxiing\"]
 17
 1
 11
 
 MONITOR
-345
-374
-403
-419
+379
+253
+437
+298
 Waiting
 count planes with [current-state = \"waiting\"]
 17
@@ -880,10 +1203,10 @@ count planes with [current-state = \"waiting\"]
 11
 
 MONITOR
-355
-450
-423
-495
+313
+403
+381
+448
 Departing
 count planes with [current-state = \"departing\"]
 17
@@ -891,36 +1214,36 @@ count planes with [current-state = \"departing\"]
 11
 
 MONITOR
-362
-530
-427
-575
+386
+402
+451
+447
 Departed
-total-departures
+count planes with [current-state = \"departed\"]
 17
 1
 11
 
 SLIDER
-352
-629
-525
-662
+107
+538
+298
+571
 set-planes
 set-planes
 0
 100
-0.0
+1.0
 1
 1
 NIL
 HORIZONTAL
 
 CHOOSER
-162
-60
-300
-105
+166
+20
+304
+65
 time-of-day
 time-of-day
 "morning" "midday" "evening" "midnight"
@@ -928,34 +1251,319 @@ time-of-day
 
 CHOOSER
 166
-127
+69
 304
-172
+114
 weather-condition
 weather-condition
 "fog" "clear" "rain" "snow"
 1
 
 CHOOSER
-70
-230
-208
-275
+166
+117
+304
+162
 season
 season
 "peak" "off-peak"
 1
 
 MONITOR
-141
-402
-234
-447
-Gate Available
-count-available-gates
+381
+353
+438
+398
+Fueling
+count planes with [current-state = \"fueling\"]
 17
 1
 11
+
+MONITOR
+314
+353
+376
+398
+Landed
+count planes with [current-state = \"landed\"]
+17
+1
+11
+
+MONITOR
+376
+200
+438
+245
+Boarding
+count planes with [current-state = \"boarding\"]
+17
+1
+11
+
+MONITOR
+377
+304
+450
+349
+To-runway
+count planes with [current-state = \"to-runway\"]
+17
+1
+11
+
+MONITOR
+314
+200
+372
+245
+Ready
+count planes with [current-state = \"ready\"]
+17
+1
+11
+
+MONITOR
+313
+453
+370
+498
+Holding
+count planes with [current-state = \"holding\"]
+17
+1
+11
+
+MONITOR
+375
+453
+455
+498
+Holding-Half
+count planes with [current-state = \"holding-half\"]
+17
+1
+11
+
+MONITOR
+312
+502
+386
+547
+Emergency
+count planes with [current-state = \"emergency\"]
+17
+1
+11
+
+MONITOR
+389
+502
+459
+547
+Deplaining
+count planes with [current-state = \"deplaining\"]
+17
+1
+11
+
+MONITOR
+312
+549
+377
+594
+Pushback
+count planes with [current-state = \"pushback\"]
+17
+1
+11
+
+MONITOR
+382
+550
+439
+595
+Parked
+count planes with [current-state = \"Parked\"]
+17
+1
+11
+
+PLOT
+4
+168
+308
+336
+Plane States
+time
+count
+0.0
+10.0
+0.0
+10.0
+true
+false
+"" ""
+PENS
+"flying" 1.0 0 -7500403 true "" ""
+"holding" 1.0 0 -2674135 true "" ""
+"holding-half" 1.0 0 -955883 true "" ""
+"landed" 1.0 0 -6459832 true "" ""
+"taxiing" 1.0 0 -1184463 true "" ""
+"fueling" 1.0 0 -10899396 true "" ""
+"boarding" 1.0 0 -13840069 true "" ""
+"pushback" 1.0 0 -14835848 true "" ""
+"waiting" 1.0 0 -11221820 true "" ""
+"to-runway" 1.0 0 -13791810 true "" ""
+"departed" 1.0 0 -13345367 true "" ""
+"deplaning" 1.0 0 -8630108 true "" ""
+"parked" 1.0 0 -5825686 true "" ""
+
+SLIDER
+103
+351
+307
+384
+passenger-spawn-rate
+passenger-spawn-rate
+0
+100
+14.0
+1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+103
+391
+307
+424
+plane-speed
+plane-speed
+0.1
+2
+0.2
+0.1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+106
+504
+302
+537
+arrival-interval
+arrival-interval
+5
+100
+20.0
+1
+1
+NIL
+HORIZONTAL
+
+SLIDER
+105
+462
+299
+495
+departure-interval
+departure-interval
+5
+100
+25.0
+1
+1
+NIL
+HORIZONTAL
+
+SWITCH
+107
+575
+299
+608
+continuous-spawn?
+continuous-spawn?
+0
+1
+-1000
+
+SLIDER
+103
+427
+308
+460
+passenger-modify-speed
+passenger-modify-speed
+0.1
+2
+0.5
+0.1
+1
+NIL
+HORIZONTAL
+
+MONITOR
+312
+611
+420
+656
+Total Passengers
+total-passengers
+17
+1
+11
+
+MONITOR
+312
+660
+444
+705
+Passengers On Board
+passengers-onboard
+17
+1
+11
+
+MONITOR
+312
+707
+435
+752
+Passengers Walking
+passengers-walking
+17
+1
+11
+
+MONITOR
+312
+149
+392
+194
+Total Planes
+count planes
+17
+1
+11
+
+SLIDER
+107
+614
+294
+647
+passenger-modify-cap
+passenger-modify-cap
+0
+10000
+300.0
+100
+1
+NIL
+HORIZONTAL
 
 @#$#@#$#@
 ## WHAT IS IT?
