@@ -515,16 +515,28 @@ to go
         ;; Assign gate and begin taxiing
         set gate-assigned available-gate
         ask available-gate [ set gate-reserved-by myself ]
-        set phase "arrival"
-        set current-state "taxiing"
+        ;set phase "arrival"
+        ;set current-state "taxiing"
       ] [
+        let slot one-of gate-patches with [ not any? turtles-here ]
+        ifelse slot != nobody [
+          set gate-assigned slot
+        ] [
+          let fallback one-of gate-patches
+          if fallback != nobody [
+            set gate-assigned fallback
+            ask fallback [ set gate-reserved-by myself ]
+          ]
+        ]
+
         ;; No gate available → DO NOT LAND
         ;; Return to holding pattern
-        set current-state "holding"
-        set destination closest-runway
-        set holding-angle 0
+        ;set current-state "holding"
+        ;set destination closest-runway
+        ;set holding-angle 0
         ;; Plane will circle until gate is free
       ]
+      set current-state "taxiing"
     ]
 
     ;; ---------- WAITING (legacy) ----------
@@ -1352,7 +1364,7 @@ CHOOSER
 weather-condition
 weather-condition
 "fog" "clear" "rain" "snow"
-2
+1
 
 CHOOSER
 166
@@ -1524,7 +1536,7 @@ passenger-spawn-rate
 passenger-spawn-rate
 0
 100
-100.0
+50.0
 1
 1
 NIL
@@ -1539,7 +1551,7 @@ plane-speed
 plane-speed
 0.1
 2
-0.2
+0.5
 0.1
 1
 NIL
@@ -1654,7 +1666,7 @@ passenger-modify-cap
 passenger-modify-cap
 0
 10000
-700.0
+1500.0
 100
 1
 NIL
