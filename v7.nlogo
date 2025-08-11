@@ -1871,7 +1871,7 @@ SWITCH
 608
 continuous-spawn?
 continuous-spawn?
-0
+1
 1
 -1000
 
