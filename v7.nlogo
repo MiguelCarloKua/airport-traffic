@@ -40,6 +40,8 @@ globals [
   flights-handled-interval passenger-throughput-interval last-interval-tick
   ;; peaks
   peak-terminal-occupancy
+
+  total-departed
 ]
 planes-own [
   plane-type current-state destination flight-path current-path-index
@@ -102,6 +104,7 @@ to setup
   set base-arrival-interval arrival-interval
   set base-departure-interval departure-interval
   set runway-capacity 1
+  set total-departed 0
   if not is-number? taxiway-capacity [set taxiway-capacity 20]
 
   setup-colors
@@ -780,6 +783,7 @@ to go
       ifelse member? patch-here runway-patches [
         set current-state "departed"
         set color gray
+        set total-departed total-departed + 1
       ] [
         taxi-to-runway
       ]
@@ -2094,8 +2098,8 @@ true
 false
 "" "set-current-plot \"Average Wait Time (Runway & Gate)\"\nset-current-plot-pen \"runway-wait\"\nplot avg-runway-wait\nset-current-plot-pen \"gate-wait\"\nplot avg-gate-wait\n"
 PENS
-"runway-wait" 1.0 0 -16777216 true "" ""
-"gate-wait" 1.0 0 -7500403 true "" ""
+"runway-wait" 1.0 0 -2674135 true "" ""
+"gate-wait" 1.0 0 -15302303 true "" ""
 
 PLOT
 1525
@@ -2134,6 +2138,17 @@ false
 PENS
 "flights" 1.0 1 -7500403 true "" ""
 "passengers" 1.0 1 -2674135 true "" ""
+
+MONITOR
+425
+610
+521
+655
+Total Departed
+total-departed
+17
+1
+11
 
 @#$#@#$#@
 ## WHAT IS IT?

@@ -40,6 +40,8 @@ globals [
   flights-handled-interval passenger-throughput-interval last-interval-tick
   ;; peaks
   peak-terminal-occupancy
+
+  total-departed
 ]
 planes-own [
   plane-type current-state destination flight-path current-path-index
@@ -102,6 +104,7 @@ to setup
   set base-arrival-interval arrival-interval
   set base-departure-interval departure-interval
   set runway-capacity 1
+  set total-departed 0
   if not is-number? taxiway-capacity [set taxiway-capacity 20]
 
   setup-colors
@@ -1110,7 +1113,7 @@ to schedule-new-departure
       set boarded? false
       set fueled? false
       set fuel-requested? true
-
+      set fueler-assigned? false
       set fueling-remaining 50
       set boarding-remaining 100
       color-by-state
@@ -1871,7 +1874,7 @@ SWITCH
 608
 continuous-spawn?
 continuous-spawn?
-0
+1
 1
 -1000
 
@@ -2094,8 +2097,8 @@ true
 false
 "" "set-current-plot \"Average Wait Time (Runway & Gate)\"\nset-current-plot-pen \"runway-wait\"\nplot avg-runway-wait\nset-current-plot-pen \"gate-wait\"\nplot avg-gate-wait\n"
 PENS
-"runway-wait" 1.0 0 -16777216 true "" ""
-"gate-wait" 1.0 0 -7500403 true "" ""
+"runway-wait" 1.0 0 -2674135 true "" ""
+"gate-wait" 1.0 0 -15302303 true "" ""
 
 PLOT
 1525
