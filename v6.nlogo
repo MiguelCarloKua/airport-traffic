@@ -498,24 +498,23 @@ to go
 
     ;; ---------- LANDED ----------
     if current-state = "landed" [
-      set phase "arrival"
-      let g min-one-of (gate-patches with [ gate-reserved-by = nobody and gate-occupied-by = nobody ]) [ distance myself ]
-      ifelse g != nobody [
-        set gate-assigned g
-        ask g [ set gate-reserved-by myself ]
+      ;; Only proceed if a gate is actually available
+      let available-gate free-arrival-gate
+
+      ifelse available-gate != nobody [
+        ;; Assign gate and begin taxiing
+        set gate-assigned available-gate
+        ask available-gate [ set gate-reserved-by myself ]
+        set phase "arrival"
+        set current-state "taxiing"
       ] [
-        let slot one-of gate-patches with [ not any? turtles-here ]
-        ifelse slot != nobody [
-          set gate-assigned slot
-        ] [
-          let fallback one-of gate-patches
-          if fallback != nobody [
-            set gate-assigned fallback
-            ask fallback [ set gate-reserved-by myself ]
-          ]
-        ]
+        ;; No gate available → DO NOT LAND
+        ;; Return to holding pattern
+        set current-state "holding"
+        set destination closest-runway
+        set holding-angle 0
+        ;; Plane will circle until gate is free
       ]
-      set current-state "taxiing"
     ]
 
     ;; ---------- WAITING (legacy) ----------
@@ -757,9 +756,13 @@ to manage-traffic
   ]
 end
 
+; =========================
+; ✅ FIXED: Robust and safe pathfinding
+; =========================
+
 to taxi-to-runway
   let options neighbors4 with [
-    member? self taxiway-patches and ; Prioritize taxiways
+    member? self navigable-patches and
     lock-ticks = 0 and
     not any? turtles-here
   ]
@@ -774,23 +777,11 @@ to taxi-to-runway
     let next-patch min-one-of cand [
       (distance target-runway) + 0.001 * abs subtract-headings myhd ((towards myself + 180) mod 360)
     ]
-    ;; Check if the next patch is a runway
-    ifelse member? next-patch runway-patches [
-      if can-enter-runway? [
-        let prev patch-here
-        face next-patch
-        move-to next-patch
-        set last-patch prev
-        ask patch-here [ set lock-ticks 2 ]
-      ]
-    ] [
-      ;; Otherwise, continue on taxiways
-      let prev patch-here
-      face next-patch
-      move-to next-patch
-      set last-patch prev
-      ask patch-here [ set lock-ticks 2 ]
-    ]
+    let prev patch-here
+    face next-patch
+    move-to next-patch
+    set last-patch prev
+    ask patch-here [ set lock-ticks 2 ]
   ]
 end
 
@@ -809,16 +800,10 @@ to taxi-to-gate
   if any? cand [
     let tgt gate-assigned
     if tgt != nobody [
-      ;; only head to our own gate
       set cand cand with [ not gate? or self = tgt ]
-
       let myhd heading
       let next-patch min-one-of cand [
         (distance tgt) + 0.001 * abs subtract-headings myhd ((towards myself + 180) mod 360)
-      ]
-      ;; capacity gate when entering taxiways
-      if member? next-patch taxiway-patches [
-        if not can-enter-taxiways? [ stop ]
       ]
       let prev patch-here
       face next-patch
@@ -1013,7 +998,8 @@ to-report pick-free-hangar-slot
 end
 
 to-report can-land?
-  report (free-arrival-gate != nobody) or hangar-has-space?
+  ;;; We are now ignoring hangar — only care about gates
+  report free-arrival-gate != nobody
 end
 
 to-report pax-offload-rate
