@@ -687,8 +687,7 @@ to go
           set hangar-reserved-by nobody ;; Free the hangar reservation
         ]
         set current-state "taxiing"
-        set destination gate-assigned  ;; return to original gate assignment
-        set phase "turnaround"
+        set destination nobody  ;; return to original gate assignment
       ]
     ]
 
@@ -1383,7 +1382,6 @@ to assign-passengers-to-plane [pln]
     ]
   ]
 end
-
 
 @#$#@#$#@
 GRAPHICS-WINDOW
