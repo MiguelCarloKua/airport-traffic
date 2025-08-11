@@ -28,8 +28,9 @@ globals [
   total-passengers passengers-onboard passengers-walking passenger-cap
 
   fueler-home-patches
-]
 
+  hangar-parking-patches
+]
 planes-own [
   plane-type current-state destination flight-path current-path-index
   base-speed current-speed priority fuel-level gate-assigned waiting-time
@@ -44,6 +45,8 @@ planes-own [
   holding-angle
   created-at
   fueler-assigned?
+  wait-counter-gate  ;; new variable to track how long the plane is stuck while taxiing
+  parking-remaining  ;; new variable to track how long the plane is parked in a hangar
 ]
 
 towers-own [ controlled-planes runway-queue gate-assignments ]
@@ -53,7 +56,12 @@ fuelers-own   [ state assigned-plane home-patch ]
 clouds-own    [ drift ]
 raindrops-own [ vy ]
 
-patches-own [ gate? gate-reserved-by gate-occupied-by lock-ticks boarding-lane? fueling-lane? fuelpad-occupied-by ]
+patches-own [ gate? gate-reserved-by gate-occupied-by lock-ticks boarding-lane? fueling-lane? fuelpad-occupied-by
+  hangar-reserved-by ;; New variable for reserving hangar spots
+  hangar-occupied-by
+]
+
+
 
 ; =========================
 ; SETUP
@@ -85,8 +93,9 @@ to setup
   setup-colors
   setup-airport-layout
 
-  set hangar-capacity 25
-  set hangar-slots n-of hangar-capacity hangar-patches
+  ;; The hangar capacity is now defined by the parking patches
+  set hangar-capacity count hangar-parking-patches
+  set hangar-slots hangar-parking-patches
 
   ;; terminal pool target
   set terminal-capacity 200
@@ -199,6 +208,8 @@ to setup-airport-layout
     set lock-ticks 0
     set boarding-lane? false
     set fueling-lane? false
+    set hangar-reserved-by nobody ;; New line to initialize hangar reservations
+    set hangar-occupied-by nobody
   ]
 
   ask gate-patches [
@@ -211,8 +222,20 @@ to setup-airport-layout
   ]
   ask intersection-patches [ set pcolor yellow ]
 
-  set hangar-patches patches with [ pxcor >= 5 and pxcor <= 10 and pycor >= 40 and pycor <= 50 ]
+  set hangar-patches patches with [ pxcor >= 5 and pxcor <= 10 and pycor >= 40 and pycor <= 45 ]
   ask hangar-patches [ set pcolor brown ]
+
+  ;; Define and color the specific hangar parking patches
+  set hangar-parking-patches patches with [
+    (pxcor >= 5 and pxcor <= 10 and (pycor = 40)) or
+    (pxcor >= 6 and pxcor <= 9 and (pycor = 42)); or
+    ;(pxcor >= 5 and pxcor <= 10 and (pycor = 46))
+  ]
+  ask hangar-parking-patches [ set pcolor brown - 3 ]
+
+  ask patches with [pxcor = 10 and pycor >= 46 and pycor <= 50] [
+    set pcolor rgb item 0 base-col item 1 base-col item 2 base-col
+  ]
 
   set terminal-patches patches with [ pxcor >= 40 and pxcor <= 60 and pycor >= 65 and pycor <= 75 ]
   ask terminal-patches [ set pcolor black ]
@@ -586,6 +609,24 @@ to go
 
     ;; ---------- TAXIING ----------
     if current-state = "taxiing" [
+      ;; increment counter if stuck, reset if moving
+      ifelse last-patch != gate-assigned [
+        set wait-counter-gate wait-counter-gate + 1
+      ] [
+        set wait-counter-gate 0
+      ]
+
+      ;; if stuck for too long, re-route to hangar
+      if wait-counter-gate >= 200 [
+        let h_slot find-and-reserve-hangar-slot
+        if h_slot != nobody [
+          free-my-gate  ;; free up the gate reservation
+          set destination h_slot
+          set current-state "to-hangar"
+          set wait-counter-gate 0
+        ]
+      ]
+
       ;; reached a gate
       if [gate?] of patch-here and patch-here = gate-assigned [
         if (phase = "arrival") and (passengers > 0) [
@@ -604,6 +645,55 @@ to go
       ;; otherwise keep moving
       if current-state = "taxiing" [ taxi-to-gate ]
     ]
+
+    ;; hangar
+
+    if current-state = "to-hangar" [
+      if patch-here = destination [
+        set current-state "parked-hangar"
+        set parking-remaining parking-duration
+        ask patch-here [ set gate-occupied-by nobody set hangar-occupied-by myself ] ;; Set hangar occupancy
+      ]
+      let options neighbors4 with [
+        member? self navigable-patches and
+        lock-ticks = 0 and
+        not any? turtles-here
+      ]
+      let cand options
+      if last-patch != nobody [
+        set cand cand with [ self != [last-patch] of myself ]
+        if not any? cand [ set cand options ]
+      ]
+      if any? cand [
+        let tgt destination
+        let myhd heading
+        let next-patch min-one-of cand [
+          (distance tgt) + 0.001 * abs subtract-headings myhd ((towards myself + 180) mod 360)
+        ]
+        let prev patch-here
+        face next-patch
+        move-to next-patch
+        set last-patch prev
+        ask patch-here [ set lock-ticks 2 ]
+      ]
+    ]
+
+    if current-state = "parked-hangar" [
+      set parking-remaining parking-remaining - 1
+      if parking-remaining <= 0 [
+        ask patch-here [
+          set gate-occupied-by nobody ;; Clear gate occupancy
+          set hangar-occupied-by nobody ;; Clear hangar occupancy
+          set hangar-reserved-by nobody ;; Free the hangar reservation
+        ]
+        set current-state "taxiing"
+        set destination gate-assigned  ;; return to original gate assignment
+        set phase "turnaround"
+      ]
+    ]
+
+
+
 
     ;; ---------- DEPLANING ----------
     ;; ---------- DEPLANING ----------
@@ -936,6 +1026,8 @@ to color-by-state
     if fueled? and passengers >= 50 [ set color c-waiting ]
   ]
   if current-state = "parked"    [ set color c-parked ]
+  if current-state = "to-hangar" [ set color brown ]  ;; New color for planes heading to a hangar
+  if current-state = "parked-hangar" [ set color c-parked ]
 end
 
 to fd-safe [d]
@@ -1108,8 +1200,14 @@ to-report hangar-has-space?
   report (count planes with [ member? patch-here hangar-slots ]) < hangar-capacity
 end
 
-to-report pick-free-hangar-slot
-  report one-of hangar-slots with [ not any? turtles-here ]
+to-report find-and-reserve-hangar-slot
+  let slot one-of hangar-parking-patches with [ hangar-reserved-by = nobody and not any? turtles-here ]
+  if slot != nobody [
+    ask slot [
+      set hangar-reserved-by myself
+    ]
+  ]
+  report slot
 end
 
 to-report can-land?
@@ -1162,11 +1260,17 @@ to-report can-enter-taxiways?
   report planes-on-taxiways < taxiway-capacity
 end
 
-
 ;; Treat runway as free if no planes are sitting on runway patches
 to-report runway-free?
   report not any? planes with [ member? patch-here runway-patches ]
 end
+
+to-report hangar-occupancy-and-capacity
+  let occupied-slots count planes with [ current-state = "parked-hangar" ]
+  let total-slots count hangar-parking-patches
+  report (word occupied-slots " / " total-slots)
+end
+
 
 
 ; =========================
@@ -1283,9 +1387,9 @@ end
 
 @#$#@#$#@
 GRAPHICS-WINDOW
-487
+542
 19
-1460
+1515
 754
 -1
 -1
@@ -1407,7 +1511,7 @@ set-planes
 set-planes
 0
 100
-42.0
+6.0
 1
 1
 NIL
@@ -1787,6 +1891,65 @@ MONITOR
 656
 Passenger Cap
 passenger-cap
+17
+1
+11
+
+MONITOR
+5
+561
+98
+606
+Hangar Capacity
+hangar-capacity
+17
+1
+11
+
+MONITOR
+461
+200
+532
+245
+To Hangar
+count planes with [current-state = \"to-hangar\"]
+17
+1
+11
+
+MONITOR
+449
+249
+534
+294
+Parked Hangar
+count planes with [current-state = \"parked-hangar\"]
+17
+1
+11
+
+SLIDER
+112
+734
+284
+767
+parking-duration
+parking-duration
+10
+300
+50.0
+10
+1
+NIL
+HORIZONTAL
+
+MONITOR
+5
+511
+98
+556
+Hangar Occupancy
+hangar-occupancy-and-capacity
 17
 1
 11
