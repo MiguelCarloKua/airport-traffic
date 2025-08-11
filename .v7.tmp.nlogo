@@ -97,16 +97,7 @@ to setup
   schedule-initial-flights
   set-weather-effects
 
-  ;; This is the new logic to adjust the passenger capacity based on the number of planes.
-  ;; It calculates a minimum cap based on `set-planes`.
-  let min-passenger-cap-planes (set-planes * 50)
 
-  ;; It then checks the value you've set with the `passenger-modify-cap` slider.
-  ;; If your slider value is less than the calculated minimum, the code will override it.
-  ifelse (passenger-modify-cap < min-passenger-cap-planes)
-  [ set passenger-cap min-passenger-cap-planes ]
-  ;; Otherwise, it uses the value you set, but ensures it doesn't exceed the terminal capacity.
-  [ set passenger-cap passenger-modify-cap ]
 end
 
 to setup-shapes
@@ -1407,7 +1398,7 @@ set-planes
 set-planes
 0
 100
-42.0
+13.0
 1
 1
 NIL
