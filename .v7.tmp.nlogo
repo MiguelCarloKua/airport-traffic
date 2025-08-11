@@ -445,7 +445,7 @@ end
 ; MAIN LOOP
 ; =========================
 to go
-
+  if ticks >= 3000 [ stop ]
   ;; --- global updates ---
   set-weather-effects
   step-weather
@@ -1620,7 +1620,7 @@ set-planes
 set-planes
 0
 100
-10.0
+100.0
 1
 1
 NIL
@@ -1634,7 +1634,7 @@ CHOOSER
 time-of-day
 time-of-day
 "morning" "midday" "evening" "midnight"
-0
+3
 
 CHOOSER
 166

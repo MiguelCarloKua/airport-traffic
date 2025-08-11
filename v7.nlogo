@@ -1620,7 +1620,7 @@ set-planes
 set-planes
 0
 100
-10.0
+100.0
 1
 1
 NIL
@@ -1634,7 +1634,7 @@ CHOOSER
 time-of-day
 time-of-day
 "morning" "midday" "evening" "midnight"
-0
+3
 
 CHOOSER
 166
@@ -2067,7 +2067,7 @@ PLOT
 1527
 20
 1856
-147
+206
 Terminal Passengers
 NIL
 NIL
@@ -2083,9 +2083,9 @@ PENS
 
 PLOT
 1526
-156
+220
 1860
-281
+387
 Average Wait Time (Runway & Gate)
 NIL
 NIL
@@ -2102,9 +2102,9 @@ PENS
 
 PLOT
 1525
-285
+406
 1861
-413
+573
 Runway & Gate Utilization (%)
 NIL
 NIL
@@ -2121,9 +2121,9 @@ PENS
 
 PLOT
 1526
-418
+592
 1861
-546
+753
 Flights and Pax per 300 ticks
 NIL
 NIL
@@ -2137,25 +2137,6 @@ false
 PENS
 "flights" 1.0 1 -7500403 true "" ""
 "passengers" 1.0 1 -2674135 true "" ""
-
-PLOT
-1525
-554
-1725
-704
-Delays vs Cancellations
-NIL
-NIL
-0.0
-10.0
-0.0
-10.0
-true
-false
-"" "set-current-plot \"Delays vs Cancellations\"\nset-current-plot-pen \"delayed\"\nplot flights-delayed\nset-current-plot-pen \"cancelled\"\nplot flights-cancelled\n"
-PENS
-"delayed" 1.0 1 -7500403 true "" ""
-"cancelled" 1.0 1 -2674135 true "" ""
 
 @#$#@#$#@
 ## WHAT IS IT?
