@@ -425,13 +425,11 @@ to go
       ] [
         ;; Boarding at purple patch
         if (purpose = "board") and [boarding-lane?] of destination-gate [
-          if [has-boarding-plane?] of destination-gate [
-            let gate-patch patch ([pxcor] of destination-gate) (([pycor] of destination-gate) + 1)
-            let plane-here [gate-occupied-by] of gate-patch
-            if (plane-here != nobody) and ([current-state] of plane-here = "boarding") and ([passengers] of plane-here < 50) [
-              ask plane-here [ set passengers passengers + 1 ]
-              die
-            ]
+          let gate-patch patch ([pxcor] of destination-gate) (([pycor] of destination-gate) + 1)
+          let plane-here [gate-occupied-by] of gate-patch
+          if (plane-here != nobody) and ([current-state] of plane-here = "boarding") and ([passengers] of plane-here < 50) [
+            ask plane-here [ set passengers passengers + 1 ]
+            die
           ]
         ]
 
@@ -556,27 +554,25 @@ to go
     ]
 
     ;; ---------- DEPLANING ----------
+    ;; ---------- DEPLANING ----------
     if current-state = "deplaning" [
       let n min list passengers pax-offload-rate
       if n > 0 [
-        let allowed (passenger-cap - total-passengers)
-        if allowed > 0 [
-          ask patch-here [
-            sprout n [
-              set breed customers
-              set shape "arrow"
-              set size 1.2
-              set color blue
-              set purpose "arrive"
-              set destination-gate one-of terminal-patches
-            ]
+        ask patch-here [
+          sprout n [
+            set breed customers
+            set shape "arrow"
+            set size 1.2
+            set color blue
+            set purpose "arrive"
+            set destination-gate one-of terminal-patches
           ]
         ]
         set passengers passengers - n
       ]
       if passengers <= 0 [
-        ;; stay at gate, start turnaround
-        ask gate-assigned [ if gate-occupied-by = myself [ set gate-occupied-by myself ] ] ;; keep occupying for service
+        ;; ✅ Instead of just spawning "arrive", we now trigger rebalancing via terminal stock
+        ask gate-assigned [ if gate-occupied-by = myself [ set gate-occupied-by myself ] ]
         set phase "turnaround"
         set fuel-requested? true
         set fueling-remaining 50
@@ -712,20 +708,21 @@ end
 ; =========================
 
 to ensure-terminal-stock
-  let terminal-boarders count customers with [
-    purpose = "board" and [pcolor] of patch-here = black
-  ]
-  let deficit terminal-capacity - terminal-boarders
-  let allowed (passenger-cap - total-passengers)
-  if deficit > 0 and allowed > 0 [
-    let n min list deficit passenger-spawn-rate
-    create-customers n [
-      move-to one-of terminal-patches
-      set shape "arrow"
-      set size 1.2
-      set color yellow
-      set purpose "board"
-      set destination-gate one-of terminal-patches
+  ;; Count how many boarding customers are currently in the terminal
+  let terminal-boarders count customers with [ purpose = "board" and [pcolor] of patch-here = black ]
+
+  ;; Only add more if below target
+  if terminal-boarders < terminal-capacity [
+    let n min (list (terminal-capacity - terminal-boarders) passenger-spawn-rate (passenger-cap - total-passengers))
+    if n > 0 [
+      create-customers n [
+        move-to one-of terminal-patches
+        set shape "arrow"
+        set size 1.2
+        set color yellow
+        set purpose "board"
+        set destination-gate one-of boarding-patches
+      ]
     ]
   ]
 end
@@ -1415,7 +1412,7 @@ passenger-spawn-rate
 passenger-spawn-rate
 0
 100
-14.0
+100.0
 1
 1
 NIL
