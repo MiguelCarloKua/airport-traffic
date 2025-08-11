@@ -169,8 +169,7 @@ to setup-airport-layout
   ask patches [ set fuelpad-occupied-by nobody ]
 
   set runway-patches patches with [
-    (pycor = 25 and pxcor >= 20 and pxcor <= 80) or
-    (pxcor = 50 and pycor >= 35 and pycor <= 55)
+    (pycor = 25 and pxcor >= 20 and pxcor <= 80)
   ]
   ask runway-patches [ set pcolor blue + 2 ]
 
@@ -1382,7 +1381,6 @@ to assign-passengers-to-plane [pln]
     ]
   ]
 end
-
 @#$#@#$#@
 GRAPHICS-WINDOW
 542
@@ -1509,7 +1507,7 @@ set-planes
 set-planes
 0
 100
-6.0
+8.0
 1
 1
 NIL
@@ -1543,7 +1541,7 @@ CHOOSER
 season
 season
 "peak" "off-peak"
-1
+0
 
 MONITOR
 381
